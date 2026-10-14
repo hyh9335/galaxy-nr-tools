@@ -37,6 +37,22 @@ class ProjectChecks(unittest.TestCase):
         self.assertIn('探测六条菜单路径', src)
         self.assertIn('中止当前操作', src)
 
+    def test_android17_binder_screen_transport_is_file_descriptor(self):
+        root = ROOT / 'app/src/main'
+        service = (root / 'java/com/example/galaxy5gmanager/PrivilegedService.java').read_text()
+        callback = (root / 'aidl/com/example/galaxy5gmanager/IGalaxyPageReader.aidl').read_text()
+        activity = ACTIVITY.read_text()
+        self.assertIn('ParcelFileDescriptor', callback)
+        self.assertIn('callback.recognize(fd, 0, 0)', service)
+        self.assertNotIn('bytes.toByteArray()', service)
+        self.assertIn('cachedRecognizer', activity)
+        self.assertIn('AutomationKeepAliveService', activity)
+
+    def test_service_manifest_is_foreground_special_use(self):
+        manifest = (ROOT / 'app/src/main/AndroidManifest.xml').read_text()
+        self.assertIn('android.permission.FOREGROUND_SERVICE_SPECIAL_USE', manifest)
+        self.assertIn('android:foregroundServiceType="specialUse"', manifest)
+
     def test_gcf_navigation_not_relative_back(self):
         text = SCRIPT.read_text()
         self.assertIn('PROTOCOL|GCF', text)

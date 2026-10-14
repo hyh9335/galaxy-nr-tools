@@ -5,7 +5,8 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.1.0
+VERSION=2.2.0
+UIA_UNAVAILABLE=0
 WORK=""
 PROFILE=core
 MODE="${1:-help}"
@@ -42,6 +43,7 @@ check_device() {
   model="$(getprop ro.product.model 2>/dev/null)"
   build="$(getprop ro.build.version.incremental 2>/dev/null)"
   android="$(getprop ro.build.version.release 2>/dev/null)"
+  case "$android" in 17*) UIA_UNAVAILABLE=1; log 'Android 17：已跳过反复被终止的 uiautomator，直接使用本机 OCR';; esac
   case "$(printf %s "$manufacturer" | tr '[:upper:]' '[:lower:]')/$model" in
     samsung/SM-S918U|samsung/SM-S918U1|samsung/SM-S938U|samsung/SM-S938U1) ;;
     *) fail "未通过机型保护：厂商=$manufacturer 型号=$model。仅自动支持 S23U/S25U 美版 U/U1。";;
@@ -106,24 +108,19 @@ parse_xml() {
 read_page() {
   is_service_foreground || fail '当前前台不是 ServiceMode；已中止，防止误点其他应用。'
   rm -f "$XML" "$MENU"
-  tries=0
-  while [ "$tries" -lt 2 ]; do
-    if uiautomator dump "$XML" > "$WORK/uiautomator.txt" 2>&1 && [ -s "$XML" ]; then
-      if parse_xml; then return 0; fi
-      dump_error='uiautomator 返回的 XML 没有可用文字控件'
-    else
-      dump_error="$(head -n 5 "$WORK/uiautomator.txt" | tr '\n' ' ' | cut -c1-240)"
-      [ -n "$dump_error" ] || dump_error='命令返回非零或 XML 文件为空'
+  if [ "$UIA_UNAVAILABLE" -eq 0 ]; then
+    if uiautomator dump "$XML" > "$WORK/uiautomator.txt" 2>&1 && [ -s "$XML" ] && parse_xml; then
+      return 0
     fi
-    tries=$((tries+1))
-    [ "$tries" -lt 2 ] && sleep 1
-  done
-  log "uiautomator dump 失败：$dump_error"
+    dump_error="$(head -n 5 "$WORK/uiautomator.txt" | tr '\n' ' ' | cut -c1-240)"
+    log "uiautomator 不可用：${dump_error:-无法解析页面}；改用 OCR"
+    UIA_UNAVAILABLE=1
+  fi
   [ -n "${G5G_OCR_REPLY:-}" ] || fail '无离线 OCR 通道。请确认使用最新版 APK；不会盲点。'
   rm -f "$G5G_OCR_REPLY"
   say '@G5G_OCR_REQUEST@'
   n=0
-  while [ "$n" -lt 60 ] && [ ! -f "$G5G_OCR_REPLY" ]; do
+  while [ "$n" -lt 100 ] && [ ! -f "$G5G_OCR_REPLY" ]; do
     sleep 0.2
     n=$((n+1))
   done
@@ -154,13 +151,16 @@ exists_label() {
 
 wait_for() {
   target="$1"; alt="${2:-}"; attempts=0
-  while [ "$attempts" -lt 5 ]; do
+  max_attempts=5
+  [ "$UIA_UNAVAILABLE" -eq 1 ] && max_attempts=2
+  while [ "$attempts" -lt "$max_attempts" ]; do
     read_page
     if exists_label "$target" || { [ -n "$alt" ] && exists_label "$alt"; }; then return 0; fi
-    attempts=$((attempts+1)); sleep 0.4
+    attempts=$((attempts+1)); sleep 0.5
   done
-  log "当前部分菜单：$(cut -f1 "$MENU" | head -n 12 | tr '\n' '|')"
-  fail "等待菜单 [$target] 失败${alt:+（备选：$alt）}。"
+  log "OCR 检测到的候选菜单（最多 18 行）："
+  cut -f1 "$MENU" | head -n 18 | while IFS= read -r label; do log "候选：$label"; done
+  fail "等待菜单 [$target] 失败${alt:+（备选：$alt）}。可能当前页面不是主菜单；已停止。"
 }
 
 # Do not use Android BACK: on ServiceMode it may jump multiple levels.
@@ -178,7 +178,9 @@ tap_label() {
   input tap "$1" "$2" >/dev/null 2>&1 || fail "input tap [$label] 失败。"
   sleep 0.5
   changed=0; attempt=0
-  while [ "$attempt" -lt 5 ]; do
+  max_attempts=5
+  [ "$UIA_UNAVAILABLE" -eq 1 ] && max_attempts=2
+  while [ "$attempt" -lt "$max_attempts" ]; do
     read_page
     now="$(cksum "$MENU" | awk '{print $1 ":" $2}')"
     [ "$now" != "$before" ] && changed=1
@@ -188,6 +190,7 @@ tap_label() {
     fi
     attempt=$((attempt+1)); sleep 0.35
   done
+  log "当前候选菜单：$(cut -f1 "$MENU" | head -n 12 | tr '\n' '|')"
   if [ "$label" = 'NEXT PAGE' ] && [ "$changed" -eq 0 ]; then
     fail 'NEXT PAGE 点击后界面未变化，拒绝继续翻页。'
   fi

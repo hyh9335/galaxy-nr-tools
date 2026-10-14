@@ -8,9 +8,7 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
-import java.io.ByteArrayOutputStream;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
+import android.os.ParcelFileDescriptor;
 import java.util.concurrent.TimeUnit;
 
 
@@ -20,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  * The script's exact digest and argv are checked before execution.
  */
 public final class PrivilegedService extends IGalaxyAutomation.Stub {
-    private static final String SCRIPT_SHA256 = "e10aa8efaf4029bed6767fde6d8e64ee6f1c0941f1af050fdd6bb1f434970795";
+    private static final String SCRIPT_SHA256 = "2753a7f7027c6e1356566ab9a554839ff677a34e71d7bca34ce96db1792160f3";
     private final StringBuilder report = new StringBuilder();
     private volatile boolean running;
     private volatile Process child;
@@ -127,21 +125,17 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
                 throw new java.io.IOException("screencap 超时");
             }
             if (grab.exitValue() != 0) throw new java.io.IOException("screencap 返回 " + grab.exitValue());
-            Bitmap original = BitmapFactory.decodeFile(shot.getAbsolutePath());
-            if (original == null) throw new java.io.IOException("ServiceMode 截图无法解码，可能受系统保护");
-            int w = original.getWidth(), h = original.getHeight();
-            int tw = Math.min(w, 1080), th = Math.round((float) h * tw / w);
-            Bitmap small = tw == w ? original : Bitmap.createScaledBitmap(original, tw, th, true);
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            if (!small.compress(Bitmap.CompressFormat.JPEG, 82, bytes))
-                throw new java.io.IOException("屏幕压缩失败");
-            if (small != original) small.recycle();
-            original.recycle();
-            if (bytes.size() > 850000) throw new java.io.IOException("截图过大，禁止 Binder 传输");
-            append("UIAutomator 失败，尝试本机离线截图文字识别（仅 ServiceMode）…");
-            result = callback.recognize(bytes.toByteArray(), w, h);
+            // The app process performs all bitmap allocation and recognition. Passing
+            // a PFD avoids Binder byte-array payloads and cuts memory copies.
+            if (shot.length() < 1200 || shot.length() > 16000000L)
+                throw new java.io.IOException("截图文件大小异常：" + shot.length());
+            append("UIAutomator 不可用：使用文件描述符发送截图供普通应用离线 OCR");
+            try (ParcelFileDescriptor fd = ParcelFileDescriptor.open(shot,
+                     ParcelFileDescriptor.MODE_READ_ONLY)) {
+                result = callback.recognize(fd, 0, 0);
+            }
             if (result == null || result.isEmpty()) result = "ERROR: 没有识别到菜单文字";
-            if (result.length() > 25000) result = "ERROR: 识别数据长度异常";
+            if (result.length() > 16000) result = "ERROR: 识别数据长度异常";
         } catch (Exception e) {
             result = "ERROR: " + e.getClass().getSimpleName() + " " + e.getMessage();
             append("离线 OCR 请求失败：" + e.getMessage());

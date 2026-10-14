@@ -25,6 +25,9 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.ParcelFileDescriptor;
+import android.graphics.Point;
+import android.content.Context;
 import android.graphics.Rect;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.Text;
@@ -58,41 +61,69 @@ public final class MainActivity extends Activity {
             else statusText.setText("未授予 Shizuku 权限。可返回 Shizuku 管理授权后重试。");
         });
     };
+    // Kept in the regular app (not the Shizuku process). A temporary foreground
+    // service keeps this app eligible to perform OCR while ServiceMode is on top.
+    private static volatile TextRecognizer cachedRecognizer;
+    private static synchronized TextRecognizer getRecognizer() {
+        if (cachedRecognizer == null)
+            cachedRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
+        return cachedRecognizer;
+    }
+    private boolean keepAliveForRun;
+    private void stopKeepAlive() {
+        if (keepAliveForRun) {
+            keepAliveForRun = false;
+            try { stopService(new Intent(this, AutomationKeepAliveService.class)); }
+            catch (RuntimeException ignored) { }
+        }
+    }
     private final IGalaxyPageReader pageReader = new IGalaxyPageReader.Stub() {
-        @Override public String recognize(byte[] jpeg, int screenWidth, int screenHeight) {
-            if (jpeg == null || jpeg.length == 0 || screenWidth <= 0 || screenHeight <= 0)
-                return "ERROR: 无效截图";
+        @Override public String recognize(ParcelFileDescriptor screenshot, int screenWidth, int screenHeight) {
+            if (screenshot == null) return "ERROR: 截图文件描述符为空";
+            Bitmap image = null;
             try {
-                Bitmap image = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+                BitmapFactory.Options info = new BitmapFactory.Options();
+                info.inJustDecodeBounds = true;
+                BitmapFactory.decodeFileDescriptor(screenshot.getFileDescriptor(), null, info);
+                if (info.outWidth < 200 || info.outHeight < 200 ||
+                    info.outWidth > 6000 || info.outHeight > 9000)
+                    return "ERROR: 截图尺寸无效 " + info.outWidth + "x" + info.outHeight;
+                BitmapFactory.Options opt = new BitmapFactory.Options();
+                // Limit allocations, but retain sufficient resolution for menu OCR.
+                opt.inSampleSize = ((long)info.outWidth * info.outHeight > 3800000) ? 2 : 1;
+                image = BitmapFactory.decodeFileDescriptor(screenshot.getFileDescriptor(), null, opt);
                 if (image == null) return "ERROR: 截图解码失败";
                 final int width = image.getWidth(), height = image.getHeight();
-                if (width < 200 || height < 200) return "ERROR: 截图尺寸不合理";
-                float fx = (float) screenWidth / width;
-                float fy = (float) screenHeight / height;
+                float fx = (float)info.outWidth / width;
+                float fy = (float)info.outHeight / height;
                 StringBuilder rows = new StringBuilder();
-                try (TextRecognizer recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)) {
-                    Text found = Tasks.await(recognizer.process(InputImage.fromBitmap(image, 0)),
-                        9, TimeUnit.SECONDS);
-                    for (Text.TextBlock block : found.getTextBlocks()) {
-                        for (Text.Line line : block.getLines()) {
-                            Rect box = line.getBoundingBox();
-                            if (box == null || box.isEmpty()) continue;
-                            String label = line.getText().toUpperCase(Locale.ROOT).trim()
-                                .replaceAll("^(?:\\[|\\()?[0-9]+(?:\\]|\\)|\\.|:)?\\s*", "")
-                                .replaceAll("\\s+", " ")
-                                .replaceAll("[^A-Z0-9 /&()\\-]", "").trim();
-                            if (label.length() == 0 || label.length() > 140) continue;
-                            int x = Math.min(screenWidth - 1, Math.max(0,
-                                Math.round(box.centerX() * fx)));
-                            int y = Math.min(screenHeight - 1, Math.max(0,
-                                Math.round(box.centerY() * fy)));
-                            rows.append(label).append('\t').append(x).append('\t').append(y).append('\n');
-                        }
+                Text found = Tasks.await(getRecognizer().process(InputImage.fromBitmap(image, 0)),
+                    13, TimeUnit.SECONDS);
+                int rowCount = 0;
+                for (Text.TextBlock block : found.getTextBlocks()) {
+                    for (Text.Line line : block.getLines()) {
+                        Rect box = line.getBoundingBox();
+                        if (box == null || box.isEmpty()) continue;
+                        String label = line.getText().toUpperCase(Locale.ROOT).trim()
+                            .replaceAll("^(?:\\[|\\()?[0-9]+(?:\\]|\\)|\\.|:)?\\s*", "")
+                            .replaceAll("\\s+", " ")
+                            .replaceAll("[^A-Z0-9 /&()\\-]", "").trim();
+                        if (label.isEmpty() || label.length() > 140) continue;
+                        int x = Math.min(info.outWidth - 1, Math.max(0, Math.round(box.centerX() * fx)));
+                        int y = Math.min(info.outHeight - 1, Math.max(0, Math.round(box.centerY() * fy)));
+                        rows.append(label).append('\t').append(x).append('\t').append(y).append('\n');
+                        if (++rowCount >= 80) break;
                     }
-                } finally { image.recycle(); }
-                return rows.length() > 0 ? rows.toString() : "ERROR: OCR 未识别到文字，可能是受保护窗口";
+                    if (rowCount >= 80) break;
+                }
+                return rows.length() > 0 ? rows.toString() : "ERROR: OCR 无文字结果（截图可能是空白或受保护画面）";
+            } catch (OutOfMemoryError e) {
+                return "ERROR: OCR 内存不足，已停止，请勿重复尝试";
             } catch (Exception e) {
-                return "ERROR: " + e.getClass().getSimpleName() + " " + e.getMessage();
+                return "ERROR: OCR " + e.getClass().getSimpleName() + " " + e.getMessage();
+            } finally {
+                if (image != null) image.recycle();
+                try { screenshot.close(); } catch (Exception ignored) { }
             }
         }
     };
@@ -108,7 +139,7 @@ public final class MainActivity extends Activity {
                         remote = null; updateButtons(false); return;
                     }
                     remote.setPageReader(pageReader);
-                    statusText.setText("Shizuku 已连接 · UID=" + uid + " · " + Build.MODEL + " · 离线 OCR 已就绪");
+                    statusText.setText("Shizuku 已连接 · UID=" + uid + " · " + Build.MODEL + " · 本地 OCR 诊断版");
                     updateButtons(true);
                 } catch (Exception e) { showError(e); }
             });
@@ -134,6 +165,7 @@ public final class MainActivity extends Activity {
                     applyCoreButton.setEnabled(!busy);
                     applyFullButton.setEnabled(!busy);
                     cancelButton.setEnabled(busy);
+                    if (!busy) stopKeepAlive();
                 } catch (Exception e) { showError(e); }
             }
             handler.postDelayed(this, 1100);
@@ -154,6 +186,8 @@ public final class MainActivity extends Activity {
     @Override protected void onDestroy() {
         active = false;
         handler.removeCallbacks(refresh);
+        // Deliberately do not stop the keep-alive service: ServiceMode may
+        // remain on top while this Activity gets destroyed by configuration.
         Shizuku.removeBinderReceivedListener(onBinder);
         Shizuku.removeBinderDeadListener(onDead);
         Shizuku.removeRequestPermissionResultListener(onPermission);
@@ -203,10 +237,19 @@ public final class MainActivity extends Activity {
             if (remote.isRunning()) return;
             String script = readAsset();
             remote.setPageReader(pageReader);
+            if (!"status".equals(mode)) {
+                try {
+                    startForegroundService(new Intent(this, AutomationKeepAliveService.class));
+                    keepAliveForRun = true;
+                } catch (RuntimeException e) {
+                    statusText.setText("前台保活服务启动失败：" + e.getMessage());
+                    return;
+                }
+            }
             boolean ok = remote.startRun(script, mode, profile, confirmation);
-            if (!ok) statusText.setText("无法启动：正在运行、身份不符或脚本完整性校验失败。");
+            if (!ok) { stopKeepAlive(); statusText.setText("无法启动：正在运行、身份不符或脚本完整性校验失败。"); }
             else { logText.setText("正在启动… 请保持屏幕解锁并让 ServiceMode 在前台。\n完成后返回这里查看记录。"); reportLast = ""; }
-        } catch (Exception e) { showError(e); }
+        } catch (Exception e) { stopKeepAlive(); showError(e); }
     }
 
     private String readAsset() throws Exception {

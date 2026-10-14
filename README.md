@@ -59,3 +59,12 @@ python3 -m unittest discover -s tests -v
 SM-S938U Android 17 上，部分 ServiceMode 页面会让 `uiautomator dump` 返回失败。新版保留 UIAutomator 文字控件识别，失败时在记录里显示该命令的原始错误摘要，并通过 Shizuku shell 的 screencap 截图，在本应用内调用打包的 ML Kit Latin OCR 离线识别菜单文字和坐标，不新增应用、不上传截图。截图在临时目录中随即删除。
 
 OCR 无法取图、没有识别到菜单、重复相同文字或点击后页面没有发生预计变化时终止，不按预设屏幕坐标猜点击。首次使用仍只建议“探测六条菜单路径”，未获真机验证之前不要执行任何实际基带写入。
+
+
+## Android 17 / SM-S938U 专项修复（0.3）
+
+在该机型实测日志中，`uiautomator dump` 直接返回 `Killed`，其后 5 次 OCR 重试最终触发 `DeadObjectException`。这**不能证明 Shizuku 已失效**：拨号成功表明 UID 2000 下的命令可工作。更可能存在系统 UI 自动化受限、OCR 页面文字不匹配及后台应用进程回收等一种或多种情况。
+
+0.3 采取以下措施：Android 17 不再反复启动会被系统杀掉的 `uiautomator`；截图只在 Shizuku shell UID 2000 中保存为私有临时文件，并通过 `ParcelFileDescriptor` 传给普通应用的 ML Kit；App 在手动启动的探测期间使用系统认可的前台服务，结束后停止；单次会话复用 OCR 引擎；找不到目标只识别至多两次并列出所见候选菜单，而不是继续重试直到 Binder 服务崩溃。截图不上传、不永久保存，Binder 不传大图片。
+
+**首次验证仅选择“探测六条菜单路径”**，不要直接进行任何写入。如果候选中只看到 `Right-hardkey :Back. Please use the Menukey.` 之类的提示且没有 `UE SETTING & INFO`，说明实际停留的 ServiceMode 页面与假定主菜单不一致，需要进一步检查页面布局，绝不可据此猜测按钮位置。即使编译及模拟测试通过，也尚不等于 S25U Android 17 真机通过。

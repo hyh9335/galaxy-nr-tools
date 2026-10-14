@@ -10,7 +10,7 @@ case "$command" in
    ro.product.manufacturer) echo samsung;;
    ro.product.model) cat "$base/model";;
    ro.build.version.incremental) echo build-101;;
-   ro.build.version.release) echo 16;;
+   ro.build.version.release) echo "${MOCK_ANDROID_RELEASE:-16}";;
    gsm.network.type) echo LTE;;
   esac;;
  id) if [ "${1:-}" = -u ]; then echo 2000; else echo 'uid=2000(shell)'; fi;;

@@ -1,5 +1,6 @@
 package com.example.galaxy5gmanager;
-// Callback lives in the regular app process; the model is bundled offline.
+import android.os.ParcelFileDescriptor;
+// Screenshots travel as a file descriptor, never as large Binder byte arrays.
 interface IGalaxyPageReader {
-    String recognize(in byte[] jpeg, int screenWidth, int screenHeight);
+    String recognize(in ParcelFileDescriptor screenshot, int screenWidth, int screenHeight);
 }

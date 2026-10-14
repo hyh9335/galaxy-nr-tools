@@ -88,7 +88,7 @@ class ServiceModeTests(unittest.TestCase):
   def test_uiautomator_failure_stops(self):
     p,s=self.execute('apply','core','APPLY',variant='dumpfail')
     self.assertNotEqual(p.returncode,0)
-    self.assertIn('uiautomator dump 失败',p.stdout)
+    self.assertIn('uiautomator 不可用',p.stdout)
     self.assertIn('无离线 OCR 通道',p.stderr)
     self.assertEqual(s['settings'],[])
 
@@ -96,7 +96,7 @@ class ServiceModeTests(unittest.TestCase):
     for name,content in [('screen','NONE'),('events',''),('keys',''),('variant','dumpfail'),('model','SM-S938U'),('settings','')]:
       (self.base/name).write_text(content)
     reply=self.base/'ocr-response.tsv'
-    env=dict(self.env, G5G_OCR_REPLY=str(reply))
+    env=dict(self.env, G5G_OCR_REPLY=str(reply), MOCK_ANDROID_RELEASE='17')
     proc=subprocess.Popen(['sh',str(SCRIPT),'probe','full'], env=env, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1)
     logs=[]
@@ -111,6 +111,8 @@ class ServiceModeTests(unittest.TestCase):
       return proc.returncode, ''.join(logs), stderr, (self.base/'events').read_text().splitlines()
     finally:
       if proc.poll() is None: proc.kill()
+      if proc.stdout: proc.stdout.close()
+      if proc.stderr: proc.stderr.close()
 
   def test_android17_ocr_fallback_six_paths_probe(self):
     menus={
@@ -137,6 +139,8 @@ class ServiceModeTests(unittest.TestCase):
     self.assertEqual(events.count('tap:NEXT PAGE'),4)
     self.assertNotIn('SET DEFAULT LTE BAND',(self.base/'settings').read_text())
     self.assertIn('@G5G_OCR_REQUEST@',out)
+    self.assertIn('Android 17',out)
+    self.assertNotIn('uiautomator 不可用',out)
 
   def test_android17_ocr_uncertain_stops_before_setting(self):
     code,out,err,events=self.ocr_probe(lambda screen:'ERROR: 受保护窗口')
@@ -152,6 +156,17 @@ class ServiceModeTests(unittest.TestCase):
     self.assertNotEqual(code,0)
     self.assertIn('多个不同位置',err)
     self.assertEqual((self.base/'settings').read_text(),'')
+
+
+  def test_android17_unrecognized_service_menu_logs_text_and_stops(self):
+    def screenshot(_screen):
+      return 'RIGHT-HARDKEY BACK\t240\t410\nPLEASE USE THE MENUKEY\t270\t510\n'
+    code,out,err,events=self.ocr_probe(screenshot)
+    self.assertNotEqual(code,0)
+    self.assertIn('候选：RIGHT-HARDKEY BACK',out)
+    self.assertIn('UE SETTING & INFO',err)
+    self.assertEqual((self.base/'settings').read_text(),'')
+    self.assertLessEqual(out.count('@G5G_OCR_REQUEST@'),2)
 
   def test_already_prune_skip(self):
     p,s=self.execute('apply','core','APPLY',variant='already')
