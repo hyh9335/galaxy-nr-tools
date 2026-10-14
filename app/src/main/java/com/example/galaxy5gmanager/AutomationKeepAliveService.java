@@ -46,7 +46,7 @@ public final class AutomationKeepAliveService extends Service {
         if (s != null) s.handler.postDelayed(() -> {
             // Leave room for a queued final onProgress Binder callback.
             if (s == active && !s.terminal)
-                s.finish(tr("Task finished; open the app to view results", "执行已结束，请回应用查看记录"), false);
+                s.finish(s.tr("Task finished; open the app to view results", "执行已结束，请回应用查看记录"), false);
         }, 1000L);
     }
 
