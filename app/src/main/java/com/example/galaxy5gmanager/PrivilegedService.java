@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  * The script's exact digest and argv are checked before execution.
  */
 public final class PrivilegedService extends IGalaxyAutomation.Stub {
-    private static final String SCRIPT_SHA256 = "189fb3e5e8ebe44a2df1a9a9feceff03c7d8aa4a11fa5650ec6c14af493ded29";
+    private static final String SCRIPT_SHA256 = "46cb9ff8655749824264391553984bfaeb19739cd96aacc8b934ee9cbee780d2";
     private final StringBuilder report = new StringBuilder();
     private volatile boolean running;
     private volatile Process child;

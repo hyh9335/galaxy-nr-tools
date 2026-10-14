@@ -15,6 +15,17 @@ class ServiceModeTests(unittest.TestCase):
 
   def tearDown(self): self.temp.cleanup()
   def mock_ocr_text(self, screen, variant):
+    if screen == 'DIAL':
+      if variant == 'dialer_keyboard_missing': return 'CONTACTS\t200\t200\n'
+      rows = []
+      for row, digits in enumerate(['123','456','789','*0#']):
+        for col, key in enumerate(digits):
+          if key.isdigit():
+            rows.append(f'{key}\t{100+col*100}\t{650+row*100}\n')
+      entered=(self.base/'keys').read_text()
+      if entered:
+        rows.append(f'{entered}\t200\t310\n')
+      return ''.join(rows)
     menu={
       'MAIN':['UE SETTING & INFO'],
       'UE':['SETTING'],
@@ -68,6 +79,39 @@ class ServiceModeTests(unittest.TestCase):
       if proc.poll() is None:proc.kill()
       if proc.stdout:proc.stdout.close()
       if proc.stderr:proc.stderr.close()
+
+  def test_direct_activity_success_skips_dialer(self):
+    proc, st = self.execute('probe', 'full', variant='direct_ok')
+    self.assertEqual(proc.returncode, 0, proc.stdout+'\n'+proc.stderr)
+    self.assertEqual(st['events'].count('direct_ok'), 6)
+    self.assertNotIn('dialer_open', st['events'])
+    self.assertNotIn('broadcast_attempt', st['events'])
+    self.assertEqual(st['settings'], [])
+
+  def test_secret_broadcast_success_skips_dialer(self):
+    proc, st = self.execute('probe', 'full', variant='broadcast_ok')
+    self.assertEqual(proc.returncode, 0, proc.stdout+'\n'+proc.stderr)
+    self.assertEqual(st['events'].count('broadcast_ok'), 6)
+    self.assertEqual(st['events'].count('direct_attempt'), 1)
+    self.assertNotIn('dialer_open', st['events'])
+    self.assertEqual(st['settings'], [])
+
+  def test_both_permission_denied_then_dialer_ocr_keypad(self):
+    proc, st = self.execute('probe', 'full', variant='')
+    self.assertEqual(proc.returncode, 0, proc.stdout+'\n'+proc.stderr)
+    self.assertEqual(st['events'].count('direct_attempt'), 1)
+    self.assertEqual(st['events'].count('broadcast_attempt'), 1)
+    self.assertEqual(st['events'].count('code_ok'), 6)
+    self.assertIn('dial_tap:#', st['events'])
+    self.assertNotIn('keyevent_pound', st['events'])
+    self.assertEqual(st['settings'], [])
+
+  def test_missing_dialpad_grid_stops_before_any_key(self):
+    proc, st = self.execute('probe', 'full', variant='dialer_keyboard_missing')
+    self.assertNotEqual(proc.returncode, 0)
+    self.assertIn('无法从截图确认完整三星数字键盘', proc.stderr)
+    self.assertEqual([x for x in st['events'] if x.startswith('dial_tap:')], [])
+    self.assertEqual(st['settings'], [])
 
   def test_status_readonly(self):
     p,s=self.execute('status')
@@ -215,7 +259,7 @@ class ServiceModeTests(unittest.TestCase):
         logs.append(line)
         if '@G5G_OCR_REQUEST@' in line:
           screen=(self.base/'screen').read_text().strip()
-          reply.write_text(reply_factory(screen),encoding='utf-8')
+          reply.write_text(self.mock_ocr_text(screen,'') if screen=='DIAL' else reply_factory(screen),encoding='utf-8')
       stderr=proc.stderr.read()
       proc.wait(timeout=30)
       return proc.returncode, ''.join(logs), stderr, (self.base/'events').read_text().splitlines()
@@ -398,10 +442,10 @@ class ServiceModeTests(unittest.TestCase):
       return 'RIGHT-HARDKEY BACK\t240\t410\nPLEASE USE THE MENUKEY\t270\t510\n'
     code,out,err,events=self.ocr_probe(screenshot)
     self.assertNotEqual(code,0)
-    self.assertIn('候选：RIGHT-HARDKEY BACK',out)
-    self.assertIn('UE SETTING & INFO',err)
+    self.assertIn('不是可确认的主菜单',out)
+    self.assertIn('没有打开 ServiceMode',err)
     self.assertEqual((self.base/'settings').read_text(),'')
-    self.assertLessEqual(out.count('@G5G_OCR_REQUEST@'),2)
+    self.assertLessEqual(out.count('@G5G_OCR_REQUEST@'),3)  # dialpad + prefix + ServiceMode
 
   def test_already_prune_skip(self):
     p,s=self.execute('apply','core','APPLY',variant='already')

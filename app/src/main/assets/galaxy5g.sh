@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.9.0
+VERSION=2.10.0
 UIA_UNAVAILABLE=1
 WORK=""
 PROFILE=core
@@ -68,14 +68,18 @@ is_service_foreground() {
   printf '%s\n' "$focus" | grep -iE 'RilServiceModeApp|servicemodeapp|service.mode' >/dev/null 2>&1
 }
 
-# Samsung engineering menus are drawn in views that can kill Android 17's
-# uiautomator process. Only our local offline screenshot/OCR channel is used.
-# Raw OCR text is normalized by a bounded page-aware matcher, not free-form
-# fuzzy string similarity. On ambiguity or lost focus, stop without touching.
-read_page() {
-  is_service_foreground || fail '当前前台不是 ServiceMode；已中止，防止误点其他应用。'
+# Offline OCR is also used on the Samsung Dialer keypad; the two screens
+# have DIFFERENT foreground guards. Do not reuse a ServiceMode-only reader.
+is_dialer_foreground() {
+  focus="$(dumpsys window 2>/dev/null | grep -iE 'mCurrentFocus|mFocusedApp|mTopFocused|mFocusedWindow' || true)"
+  printf '%s\n' "$focus" | grep -iE 'com\.samsung\.android\.dialer|com\.android\.dialer|com\.sec\.android\.app\.dialertab' >/dev/null 2>&1 && return 0
+  focus="$(dumpsys activity activities 2>/dev/null | grep -iE 'mResumedActivity|topResumedActivity|Resumed:' || true)"
+  printf '%s\n' "$focus" | grep -iE 'com\.samsung\.android\.dialer|com\.android\.dialer|com\.sec\.android\.app\.dialertab' >/dev/null 2>&1
+}
+
+read_ocr_snapshot() {
   rm -f "$MENU"
-  [ -n "${G5G_OCR_REPLY:-}" ] || fail '无离线 OCR 通道。请确认使用最新版 APK；不会盲点。'
+  [ -n "${G5G_OCR_REPLY:-}" ] || fail '无离线 OCR 通道；无法安全识别页面。'
   rm -f "$G5G_OCR_REPLY"
   say '@G5G_OCR_REQUEST@'
   n=0
@@ -83,15 +87,25 @@ read_page() {
     sleep 0.2
     n=$((n+1))
   done
-  [ -f "$G5G_OCR_REPLY" ] || fail '离线 OCR 响应超时；请检查手机电源管理和执行记录。'
+  [ -f "$G5G_OCR_REPLY" ] || fail '离线 OCR 响应超时。'
   if grep '^ERROR:' "$G5G_OCR_REPLY" >/dev/null 2>&1; then
     fail "离线 OCR 失败：$(head -n 1 "$G5G_OCR_REPLY" | cut -c1-220)"
   fi
-  # Strict TSV: label / x / y. Invalid or empty responses must NOT cause a tap.
-  awk -F '\t' 'NF!=3 || $1=="" || $2!~/^[0-9]+$/ || $3!~/^[0-9]+$/ {bad=1} END {exit bad}' "$G5G_OCR_REPLY" || fail '离线 OCR 返回了无效菜单格式。'
-  [ -s "$G5G_OCR_REPLY" ] || fail '离线 OCR 未识别出任何菜单文字，可能是防截图/受保护窗口。'
-  cp "$G5G_OCR_REPLY" "$MENU" || fail '无法保存本机 OCR 菜单结果。'
+  awk -F '\t' 'NF!=3 || $1=="" || $2!~/^[0-9]+$/ || $3!~/^[0-9]+$/ {bad=1} END {exit bad}' "$G5G_OCR_REPLY" || fail '离线 OCR 返回了无效格式。'
+  [ -s "$G5G_OCR_REPLY" ] || fail 'OCR 没有识别到任何文字。'
+  cp "$G5G_OCR_REPLY" "$MENU" || fail '无法保存 OCR 结果。'
+}
+
+read_page() {
+  is_service_foreground || fail '当前前台不是 ServiceMode；已中止，防止误点其他应用。'
+  read_ocr_snapshot
   is_service_foreground || fail 'OCR 完成后 ServiceMode 失焦；未执行点击。'
+}
+
+read_dialer_page() {
+  is_dialer_foreground || fail '当前前台不是三星拨号器；拒绝向未知应用注入按键。'
+  read_ocr_snapshot
+  is_dialer_foreground || fail '键盘截图后拨号器已经失焦；拒绝继续。'
 }
 
 # find_label returns distinct menu target XY; exit=4 missing, exit=3 ambiguous.
@@ -266,37 +280,162 @@ try_menu_back_to_main() {
   [ "$(classify_page)" = MAIN ]
 }
 
+# Cache permission-denied direct entry methods for the current workflow,
+# rather than issuing six identical denied commands during a six-step probe.
+DIRECT_ACTIVITY_UNAVAILABLE=0
+SECRET_BROADCAST_UNAVAILABLE=0
+
+# Return 0 only after the ServiceMode MAIN page is OCR-confirmed. Shell command
+# success is never sufficient to claim the engineering screen was opened.
+service_main_ready() {
+  tries=0
+  while [ "$tries" -lt 8 ]; do
+    if is_service_foreground; then
+      sleep 0.4
+      read_page
+      if [ "$(classify_page)" = MAIN ]; then return 0; fi
+      log 'ServiceMode 已出现，但不是可确认的主菜单；不继续盲目导航。'
+      return 1
+    fi
+    tries=$((tries+1))
+    sleep 0.35
+  done
+  return 1
+}
+
+try_direct_activity() {
+  [ "$DIRECT_ACTIVITY_UNAVAILABLE" -eq 0 ] || return 1
+  log '启动入口 1/3：尝试直接打开 ServiceMode Activity…'
+  output="$(am start -W -n com.sec.android.RilServiceModeApp/com.sec.android.RilServiceModeApp.ServiceModeApp 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] || printf '%s' "$output" | grep -qiE 'SecurityException|Permission Denial|not exported|Error type'; then
+    log "直接启动被系统拒绝：$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-150)"
+    DIRECT_ACTIVITY_UNAVAILABLE=1
+    return 1
+  fi
+  if service_main_ready; then log '入口 1/3：ServiceMode 主菜单验证通过。'; return 0; fi
+  DIRECT_ACTIVITY_UNAVAILABLE=1
+  log '入口 1/3 没有打开可验证的主菜单。'
+  return 1
+}
+
+try_secret_broadcast() {
+  [ "$SECRET_BROADCAST_UNAVAILABLE" -eq 0 ] || return 1
+  log '启动入口 2/3：尝试三星工程码广播…'
+  output="$(am broadcast -a com.samsung.android.action.SECRET_CODE -d android_secret_code://27663368378 -n com.sec.android.RilServiceModeApp/.SecKeyStringBroadcastReceiver 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] || printf '%s' "$output" | grep -qiE 'SecurityException|Permission Denial|not exported|not allowed'; then
+    log "工程码广播被系统拒绝：$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-150)"
+    SECRET_BROADCAST_UNAVAILABLE=1
+    return 1
+  fi
+  if service_main_ready; then log '入口 2/3：ServiceMode 主菜单验证通过。'; return 0; fi
+  SECRET_BROADCAST_UNAVAILABLE=1
+  log '入口 2/3 没有打开可验证的主菜单。'
+  return 1
+}
+
+# OCR keypad recognition: accept an isolated key number or a dialer button
+# label such as "2 ABC". Never treat the phone number (11 digits) as a key.
+# Only derive * and # from a verified 1-9/0 3-column physical keypad, with
+# spacing constraints; do NOT use fixed screen coordinates or KEYCODE_POUND.
+locate_dial_key() {
+  awk -F '\t' -v key="$1" '
+  function clean(s) {gsub(/^[[:space:]]+|[[:space:]]+$/,"",s);gsub(/[[:space:]]+/," ",s);return s}
+  {
+    t=clean($1)
+    if (t ~ /^[0-9]$/ || t ~ /^[2-9] [A-Z][A-Z][A-Z]?[A-Z]?$/) {
+      d=substr(t,1,1)
+      if (!(d in seen)) {seen[d]=1;xs[d]=$2;ys[d]=$3}
+      else {duplicate[d]=1}
+    }
+  }
+  END {
+    for (i=1;i<=9;i++) if (!seen[i] || duplicate[i]) exit 5
+    if (!seen[0] || duplicate[0]) exit 5
+    # Keypad must be ordered in three rows and one final row.
+    if (!(xs[1]<xs[2] && xs[2]<xs[3] && xs[4]<xs[5] && xs[5]<xs[6] && xs[7]<xs[8] && xs[8]<xs[9])) exit 5
+    if (!(ys[1]<=ys[4] && ys[4]<ys[7] && ys[7]<ys[0])) exit 5
+    dx=(xs[3]-xs[1])/2; dy=(ys[7]-ys[1])/2
+    if (dx<35 || dy<35 || dx>800 || dy>900) exit 5
+    if (xs[0]<xs[7] || xs[0]>xs[9]) exit 5
+    # OCR often omits * and # glyphs; derive only after grid validation.
+    if(key=="*") {x=xs[7]; y=ys[0]}
+    else if(key=="#") {x=xs[9]; y=ys[0]}
+    else if (key in seen) {x=xs[key]; y=ys[key]}
+    else exit 5
+    print x " " y
+  }' "$MENU"
+}
+
+# Ignore ambient UI text; recognize the current dialer number only if the OCR
+# produces the full contiguous prefix. Ambiguous OCR fails closed.
+verify_dialed_prefix() {
+  awk -F '\t' '
+  {
+    t=$1
+    gsub(/[[:space:]()-]/,"",t)
+    if(t=="*#27663368378" || t=="#27663368378" || t=="27663368378") found=1
+  }
+  END {exit !found}' "$MENU"
+}
+
+try_dialer_ocr() {
+  log '启动入口 3/3：检查拨号器键盘，OCR 定位 *、# 与数字键…'
+  am start -W -a android.intent.action.DIAL >/dev/null 2>&1 || fail '无法打开拨号器。'
+  sleep 1.1
+  is_dialer_foreground || fail '拨号器尚未显示，禁止盲目输入工程码。'
+  read_dialer_page
+  keys="$WORK/keypad.tsv"
+  cp "$MENU" "$keys"
+  # Only start if a complete keypad grid is identified. Save positions before
+  # the dialed number is rendered (later OCR could detect unrelated digits).
+  for key in 1 2 3 4 5 6 7 8 9 0 '*' '#'; do
+    locate_dial_key "$key" >> "$WORK/positions.tsv" || fail '无法从截图确认完整三星数字键盘（1–9、0、*、#）；停止，不使用固定坐标。'
+  done
+  # Code is deliberately split into individual touchscreen taps. Shell
+  # injection of KEYCODE_POUND has failed on both tested One UI versions.
+  # Positions ordered as 1..9,0,*,# in positions.tsv.
+  : > "$WORK/positions-sequence.tsv"
+  for k in '*' '#' 2 7 6 6 3 3 6 8 3 7 8 '#'; do
+    case "$k" in '*' ) index=11;; '#' ) index=12;; 0) index=10;; *) index="$k";; esac
+    sed -n "${index}p" "$WORK/positions.tsv" >> "$WORK/positions-sequence.tsv"
+  done
+  count=1
+  while [ "$count" -le 14 ]; do
+    is_dialer_foreground || { is_service_foreground && break; fail '拨号中途离开三星拨号器，已停止。'; }
+    pos="$(sed -n "${count}p" "$WORK/positions-sequence.tsv")"
+    [ -n "$pos" ] || fail '内部按键映射缺失，停止输入。'
+    set -- $pos
+    input tap "$1" "$2" >/dev/null 2>&1 || fail '拨号键盘点击失败。'
+    sleep 0.18
+    count=$((count+1))
+    if [ "$count" -eq 14 ]; then
+      # The last # is special: first ensure all numeric digits landed.
+      sleep 0.45
+      read_dialer_page
+      if ! verify_dialed_prefix; then
+        log "拨号器 OCR 未确认完整工程码前缀，候选：$(cut -f1 "$MENU" | head -n 8 | tr '\n' '|')"
+        fail '无法确认工程码前缀是否完整，已停止；请手动输入工程码或提供拨号器截图。'
+      fi
+    fi
+  done
+  if service_main_ready; then log '入口 3/3：工程码成功打开 ServiceMode。'; return 0; fi
+  fail '已经提交结尾 #，但没有打开 ServiceMode；不追加字符或盲目重试。'
+}
+
 open_service_main() {
-  # A new entry to main screen for EVERY item, never guess BACK-stack depth.
   if is_service_foreground; then
-    # Check actual state; continuing from a verified root is safer/faster than
-    # restarting the dialer. Unknown or nested pages use guarded reentry.
     read_page
     if [ "$(classify_page)" = MAIN ]; then
-      log '状态机：当前已经位于工程主菜单，继续导航。'
+      log '状态机：已处于 ServiceMode 主菜单。'
       return 0
     fi
     am force-stop com.sec.android.RilServiceModeApp >/dev/null 2>&1 || true
     am force-stop com.sec.android.app.servicemodeapp >/dev/null 2>&1 || true
-    sleep 0.3
+    sleep 0.35
   fi
-  am start -W -a android.intent.action.DIAL >/dev/null 2>&1 || fail '无法打开系统拨号器。'
-  sleep 0.8
-  # Samsung Dialer secret codes trigger on last #, no call key sent.
-  input keyevent KEYCODE_STAR >/dev/null 2>&1 || fail '无法模拟 * 键。'
-  input keyevent KEYCODE_POUND >/dev/null 2>&1 || fail '无法模拟 # 键。'
-  input text 27663368378 >/dev/null 2>&1 || fail '无法输入工程码数字。'
-  input keyevent KEYCODE_POUND >/dev/null 2>&1 || fail '无法模拟最后一个 #。'
-  attempt=0
-  while [ "$attempt" -lt 12 ]; do
-    if is_service_foreground; then
-      wait_for 'UE SETTING & INFO'
-      [ "$(classify_page)" = MAIN ] || fail '菜单虽包含 UE SETTING 字样但不是主菜单，已停止。'
-      return 0
-    fi
-    attempt=$((attempt+1)); sleep 0.6
-  done
-  fail '没有进入 ServiceMode。检查三星原生拨号器的数字键盘是否显示、暗码是否可手动打开。'
+  try_direct_activity && return 0
+  try_secret_broadcast && return 0
+  try_dialer_ocr
 }
 
 step_info() {

@@ -124,9 +124,9 @@ public final class MainActivity extends Activity {
                         Rect box = line.getBoundingBox();
                         if (box == null || box.isEmpty()) continue;
                         String label = line.getText().toUpperCase(Locale.ROOT).trim()
-                            .replaceAll("^(?:\\[|\\()?[0-9]+(?:\\]|\\)|\\.|:)?\\s*", "")
+                            .replaceAll("^(?:\\[[0-9]+\\]|\\([0-9]+\\)|[0-9]+[.):])\\s*", "")
                             .replaceAll("\\s+", " ")
-                            .replaceAll("[^A-Z0-9 /&()*\\-]", "").trim();
+                            .replaceAll("[^A-Z0-9 /&()*#\\-]", "").trim();
                         if (label.isEmpty() || label.length() > 140) continue;
                         int x = Math.min(info.outWidth - 1, Math.max(0, Math.round(box.centerX() * fx)));
                         int y = Math.min(info.outHeight - 1, Math.max(0, Math.round(box.centerY() * fy)));

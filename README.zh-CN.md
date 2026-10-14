@@ -48,3 +48,9 @@
 **项目自行编写的代码与原创图标采用 MIT 许可**；Shizuku API 使用自身的 MIT 许可；Google ML Kit 则遵守 Google 的专有服务/SDK 条款，不能宣称其中的模型也采用 MIT。具体见第三方说明。本项目与三星、Google、Shizuku 官方均无合作或授权关系，未使用其官方图标。
 
 开发构建：JDK 17、Android SDK 35、Gradle 8.9；运行 `python3 -m unittest discover -s tests -v` 和 `gradle :app:assembleDebug`。保留旧包名 `com.example.galaxy5gmanager` 以兼容历史安装。
+
+### 进入 ServiceMode 的三级方案（v0.10 实验版）
+
+授权 Shizuku 后，先选择 **探测六条菜单路径**。应用依次尝试直接启动 ServiceMode Activity、发送三星工程码广播，最后通过本机离线 OCR 识别三星电话的数字键盘并逐键点击。未 Root 的系统通常会拒绝前两种调用。第三级不再依赖 `KEYCODE_POUND` 或固定坐标；会校验完整键盘和拨号前缀，不能确认时停止。只有 OCR 确认 ServiceMode 主菜单出现，才会继续菜单操作。
+
+**S23 Ultra / One UI 8.5、S25 Ultra / One UI 9：** 新拨号方案目前只通过模拟测试，尚未在这两台手机实际测试。请先用「探测」而不是「恢复」验证。如果在输入工程码时停止，请提供脱敏后的执行日志和不含私人电话号码的键盘截图。

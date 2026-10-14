@@ -12,6 +12,19 @@ class ProjectChecks(unittest.TestCase):
         digest = hashlib.sha256(SCRIPT.read_bytes()).hexdigest()
         self.assertIn('SCRIPT_SHA256 = "' + digest + '"', SERVICE.read_text())
 
+    def test_three_stage_launcher_and_keypad_safety(self):
+        script = SCRIPT.read_text()
+        self.assertIn('try_direct_activity()', script)
+        self.assertIn('try_secret_broadcast()', script)
+        self.assertIn('try_dialer_ocr()', script)
+        self.assertIn('locate_dial_key()', script)
+        self.assertIn('verify_dialed_prefix()', script)
+        self.assertNotIn('input keyevent KEYCODE_POUND', script)
+        self.assertNotIn('uiautomator dump', script)
+        self.assertIn('DIRECT_ACTIVITY_UNAVAILABLE', script)
+        activity = ACTIVITY.read_text()
+        self.assertIn('[0-9]+', activity)
+
     def test_manifest_has_no_network_and_uses_guarded_provider(self):
         src = (ROOT / 'app/src/main/AndroidManifest.xml').read_text()
         ET.fromstring(src)

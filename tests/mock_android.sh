@@ -20,11 +20,22 @@ case "$command" in
    echo 'mCurrentFocus=null'; echo "mFocusedApp=$focus/.Main"
   else echo "mResumedActivity=$focus/.Main"; fi;;
  am)
-  if [ "$1" = start ]; then
-   echo DIAL > "$base/screen"; : > "$base/keys"; echo dialer_open >> "$base/events"
-  else
-   echo NONE > "$base/screen"; echo force_stop >> "$base/events"
-  fi;;
+  case "$1" in
+   start)
+     if [ "${3:-}" = -n ]; then
+       echo direct_attempt >> "$base/events"
+       if [ "$variant" = direct_ok ]; then echo MAIN > "$base/screen"; echo direct_ok >> "$base/events"; exit 0; fi
+       echo 'SecurityException: Permission Denial: not exported' >&2;exit 1
+     fi
+     echo DIAL > "$base/screen"; : > "$base/keys"; echo dialer_open >> "$base/events";;
+   broadcast)
+     echo broadcast_attempt >> "$base/events"
+     if [ "$variant" = broadcast_ok ]; then echo MAIN > "$base/screen"; echo broadcast_ok >> "$base/events"; exit 0; fi
+     echo 'SecurityException: Permission Denial' >&2;exit 1;;
+   force-stop)
+     echo NONE > "$base/screen"; echo force_stop >> "$base/events";;
+   *) echo "unknown am: $1" >&2; exit 41;;
+  esac;;
  input)
   case "$1" in
    text) printf '%s' "$2" >> "$base/keys";;
@@ -34,6 +45,22 @@ case "$command" in
      echo MAIN > "$base/screen"; echo code_ok >> "$base/events"
     fi;;
    tap)
+    if [ "$screen" = DIAL ]; then
+      x=$2; y=$3
+      case "$y" in
+       650) case "$x" in 100) key=1;;200) key=2;;300) key=3;; *) exit 40;;esac;;
+       750) case "$x" in 100) key=4;;200) key=5;;300) key=6;; *) exit 40;;esac;;
+       850) case "$x" in 100) key=7;;200) key=8;;300) key=9;; *) exit 40;;esac;;
+       950) case "$x" in 100) key='*';;200) key=0;;300) key='#';; *) exit 40;;esac;;
+       *) exit 40;;
+      esac
+      printf '%s' "$key" >> "$base/keys"
+      echo "dial_tap:$key" >> "$base/events"
+      if [ "$(cat "$base/keys")" = '*#27663368378#' ]; then
+        echo MAIN > "$base/screen"; echo code_ok >> "$base/events"
+      fi
+      exit 0
+    fi
     idx=$(( ($3-150)/100 ))
     case "$screen" in
      MAIN) labels='UE SETTING & INFO';;

@@ -71,3 +71,9 @@ The app ID remains `com.example.galaxy5gmanager` for continuity with existing in
 Own project sources and original icon artwork are licensed under the [MIT license](LICENSE). **Third-party dependencies are not relicensed under MIT.** Shizuku-API is MIT; Google ML Kit is governed by Google's terms, and some bundled model components are proprietary. See [third-party notices](THIRD_PARTY_NOTICES.md) and [privacy](PRIVACY.md).
 
 Not affiliated with, endorsed by, or sponsored by Samsung, Google, or the Shizuku team. Samsung and Galaxy are respective owners' trademarks. This app intentionally uses an original icon, not Samsung/Shizuku artwork.
+
+### Launching ServiceMode (v0.10 experimental)
+
+After granting Shizuku, tap **Probe six menu paths**. The launcher first attempts the ServiceMode Activity, then Samsung's protected secret-code broadcast, and finally on-device OCR-guided dialpad taps. On many stock unrooted Galaxy devices the first two methods are blocked by Android permissions. The fallback requires the **Samsung Phone keypad** to be visibly open and the screen unlocked. It refuses to dial if all ten keys cannot be confidently positioned or if the code prefix cannot be confirmed. A successful ADB command alone is never considered proof that the ServiceMode main menu opened.
+
+**S23 Ultra / One UI 8.5 and S25 Ultra / One UI 9:** the keypad OCR fallback has not yet been validated on your actual displays; only the full mock tests have passed. If a probe stops during keypad entry, please supply the redacted execution log and a screenshot of the dialpad (without personal numbers or contacts). Do not run Restore as a test.
