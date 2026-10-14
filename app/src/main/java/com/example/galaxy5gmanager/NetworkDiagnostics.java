@@ -35,6 +35,18 @@ public final class NetworkDiagnostics {
         return "结论：当前蜂窝数据网络类型不足以判断 5G 是否可用，不能自动建议修改工程设置。";
     }
 
+    private static String radioTypeName(int type) {
+        switch (type) {
+            case TelephonyManager.NETWORK_TYPE_NR: return "NR (5G)";
+            case TelephonyManager.NETWORK_TYPE_LTE: return "LTE (4G / 5G NSA 锚点)";
+            case TelephonyManager.NETWORK_TYPE_HSPAP: return "HSPA+ (3G)";
+            case TelephonyManager.NETWORK_TYPE_UMTS: return "UMTS (3G)";
+            case TelephonyManager.NETWORK_TYPE_IWLAN: return "IWLAN (Wi-Fi 承载)";
+            case TelephonyManager.NETWORK_TYPE_UNKNOWN: return "未知";
+            default: return "网络类型代码 " + type;
+        }
+    }
+
     public static Result inspect(Context context, int override) {
         if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED)
             return new Result("未授权读取电话状态。仅在手机本地读取，不会上传，也不会读取 IMEI/IMSI。", false);
@@ -42,7 +54,7 @@ public final class NetworkDiagnostics {
             TelephonyManager tm = context.getSystemService(TelephonyManager.class);
             if (tm == null) return new Result("无蜂窝网络管理器；无法检测。", false);
             int dataRat = tm.getDataNetworkType();
-            String label = TelephonyManager.getNetworkTypeName(dataRat);
+            String label = radioTypeName(dataRat);
             String display = override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ? "系统 5G NSA 显示" :
                 override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED ? "系统增强型 5G 显示（不等于一定在毫米波）" :
                 override < 0 ? "尚未收到网络显示回调" : "没有 5G 显示标记";
