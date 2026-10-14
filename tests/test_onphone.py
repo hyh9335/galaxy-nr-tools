@@ -128,7 +128,7 @@ class ServiceModeTests(unittest.TestCase):
       'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
       'PRUNE':['REMOVE NR5G PRUNE'],
       'GCF':['REMOVE ONLY NR WHITELIST'],
-      'SUB':['ALL ENABLE'],
+      'SUB':['ALL ENABLE','SUB6 ONLY ENABLE','MMWAVE ONLY ENABLE','DISABLE'],
       'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
     }
     def make(screen):
@@ -142,6 +142,66 @@ class ServiceModeTests(unittest.TestCase):
     self.assertIn('Android 17',out)
     self.assertNotIn('uiautomator 不可用',out)
 
+  def test_android17_s25u_sub6_ocr_selected_marker_probe(self):
+    # Matches the screenshot's options and the real OCR suffix mismatch.
+    menu = {
+      'MAIN':['UE SETTING & INFO'], 'UE':['SETTING'], 'SETTING':['SYSTEM','PROTOCOL'],
+      'SYSTEM0':['NEXT PAGE','PAGE ZERO'], 'SYSTEM1':['NEXT PAGE','PAGE ONE'],
+      'SYSTEM2':['NEXT PAGE','PAGE TWO'], 'SYSTEM3':['NEXT PAGE','PAGE THREE'],
+      'SYSTEM4':['NEXT PAGE','SET LTE BAND CONFIG','PAGE FOUR'],
+      'LTE':['SET DEFAULT LTE BAND'], 'PROTOCOL':['NR5G','GCF'],
+      'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
+      'PRUNE':['REMOVE NR5G PRUNE'], 'GCF':['REMOVE ONLY NR WHITELIST'],
+      'SUB':['NR5G ENABLE/ISABLE VENU','ACTIVESTACK SUB 1 &2',
+             'ALL ENABLE ()','SUB6 ONLY ENABLE','MMWAVE ONLY ENABLE','DISABLE'],
+      'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
+    }
+    def page(screen):
+      options=menu[screen]
+      # Screenshot-like OCR includes headers above the tap targets; our mock
+      # navigation indices assume row N has y=150+100*N, so supply recognized
+      # sibling menu labels only in SUB for stable simulated tap geometry.
+      if screen=='SUB':options=options[2:]
+      return ''.join(f'{v}\t210\t{150+100*i}\n' for i,v in enumerate(options))
+    code,out,err,events=self.ocr_probe(page)
+    self.assertEqual(code,0,out+'\n'+err)
+    self.assertIn('选择标记',out)
+    self.assertEqual((self.base/'settings').read_text(),'')
+
+  def test_selected_sub6_apply_skips_existing_without_toggle(self):
+    p,s=self.execute('apply','full','FULL',variant='selected')
+    self.assertEqual(p.returncode,0,p.stdout+'\n'+p.stderr)
+    self.assertIn('已选中',p.stdout)
+    self.assertNotIn('ALL ENABLE',s['settings'])
+    self.assertEqual(len(s['settings']),5)
+
+  def test_uncertain_sub6_selection_refuses_apply_and_reboot_flag(self):
+    p,s=self.execute('apply','full','FULL',variant='uncertain')
+    self.assertNotEqual(p.returncode,0)
+    self.assertIn('选择标记不确定',p.stderr)
+    self.assertNotIn('ALL ENABLE',s['settings'])
+    self.assertFalse((self.base/'output'/'last-SM-S938U.txt').exists())
+
+  def test_all_enable_out_of_context_does_not_match(self):
+    # Regression: never use only the string ALL ENABLE to infer the SUB6 page.
+    def page(screen):
+      if screen=='SUB':return 'ALL ENABLE (*)\t210\t150\n'
+      options={
+        'MAIN':['UE SETTING & INFO'],'UE':['SETTING'],'SETTING':['SYSTEM','PROTOCOL'],
+        'SYSTEM0':['NEXT PAGE','PAGE ZERO'],'SYSTEM1':['NEXT PAGE','PAGE ONE'],
+        'SYSTEM2':['NEXT PAGE','PAGE TWO'],'SYSTEM3':['NEXT PAGE','PAGE THREE'],
+        'SYSTEM4':['NEXT PAGE','SET LTE BAND CONFIG','PAGE FOUR'],
+        'LTE':['SET DEFAULT LTE BAND'],'PROTOCOL':['NR5G','GCF'],
+        'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
+        'PRUNE':['REMOVE NR5G PRUNE'],'GCF':['REMOVE ONLY NR WHITELIST'],
+        'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST']
+      }[screen]
+      return ''.join(f'{v}\t210\t{150+100*i}\n' for i,v in enumerate(options))
+    code,out,err,events=self.ocr_probe(page)
+    self.assertNotEqual(code,0)
+    self.assertIn('重新定位后仍未完成',err)
+    self.assertEqual((self.base/'settings').read_text(),'')
+
   def test_android17_next_page_arrow_ocr_all_four_pages(self):
     menus={
       'MAIN':['UE SETTING & INFO'],'UE':['SETTING'],
@@ -154,7 +214,7 @@ class ServiceModeTests(unittest.TestCase):
       'LTE':['SET DEFAULT LTE BAND'], 'PROTOCOL':['NR5G','GCF'],
       'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
       'PRUNE':['REMOVE NR5G PRUNE'], 'GCF':['REMOVE ONLY NR WHITELIST'],
-      'SUB':['ALL ENABLE'], 'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
+      'SUB':['ALL ENABLE','SUB6 ONLY ENABLE','MMWAVE ONLY ENABLE','DISABLE'], 'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
     }
     code,out,err,events=self.ocr_probe(lambda page: ''.join(
       f'{s}\t210\t{150+100*i}\n' for i,s in enumerate(menus[page])))
@@ -174,7 +234,7 @@ class ServiceModeTests(unittest.TestCase):
       'LTE':['SET DEFAULT LTE BAND'], 'PROTOCOL':['NR5G','GCF'],
       'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
       'PRUNE':['REMOVE NR5G PRUNE'], 'GCF':['REMOVE ONLY NR WHITELIST'],
-      'SUB':['ALL ENABLE'], 'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
+      'SUB':['ALL ENABLE','SUB6 ONLY ENABLE','MMWAVE ONLY ENABLE','DISABLE'], 'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
     }
     # Mock tap centers use row indices; the harmless header is NOT a tappable
     # mock menu item, so return only the OCR-distorted actual root menu label.

@@ -18,11 +18,12 @@ import java.util.concurrent.TimeUnit;
  * The script's exact digest and argv are checked before execution.
  */
 public final class PrivilegedService extends IGalaxyAutomation.Stub {
-    private static final String SCRIPT_SHA256 = "5a8f467ee86457e1975c2f6457cba7da9ee60f7773bfb5f2ff2bd8c7a3b439a4";
+    private static final String SCRIPT_SHA256 = "d243eca8b70fa73d5ea5f592633b424ae5f8e933017ad5c7d84a69ee653cfe1c";
     private final StringBuilder report = new StringBuilder();
     private volatile boolean running;
     private volatile Process child;
     private volatile boolean cancelled;
+    private volatile boolean rebootEligible;
     private volatile IGalaxyPageReader pageReader;
     private Thread worker;
 
@@ -53,6 +54,7 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
         report.setLength(0);
         append("执行身份 UID=" + shellUid() + "，模式=" + mode + "/" + profile);
         cancelled = false;
+        rebootEligible = false;
         running = true;
         worker = new Thread(() -> runJob(script, mode, profile, confirmation), "galaxy-5g-worker");
         worker.start();
@@ -93,6 +95,8 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
                 }
             }
             int code = p.waitFor();
+            rebootEligible = code == 0 && !cancelled && "apply".equals(mode);
+            if (rebootEligible) append("恢复菜单操作全部完成；建议重启。返回应用可选择立即重启或稍后重启。");
             append(cancelled ? "已中断。某些步骤可能已经提交；请检查再决定是否重试。" :
                 (code == 0 ? "流程结束（仅代表脚本完成；并非基带 NV 验证）。" :
                     "流程异常终止，退出码=" + code + "。请检查前面的错误，不要盲目重试。"));
@@ -165,6 +169,24 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
     }
 
     @Override public boolean isRunning() { return running; }
+
+    @Override public boolean canReboot() { return rebootEligible && !running && !cancelled; }
+
+    // Allowed only after a complete, successful apply. The app must show a
+    // separate confirmation dialog before invoking this fixed command.
+    @Override public synchronized boolean rebootDevice() {
+        if (!canReboot() || (shellUid() != 2000 && shellUid() != 0)) return false;
+        try {
+            new ProcessBuilder("/system/bin/svc", "power", "reboot").start();
+            rebootEligible = false;
+            append("已发送系统重启请求；如果设备没有重启，请手动重启。");
+            return true;
+        } catch (Exception e) {
+            append("无法发送重启指令：" + e.getMessage());
+            return false;
+        }
+    }
+
     @Override public synchronized String getReport() { return report.toString(); }
 
     @Override public void cancel() {

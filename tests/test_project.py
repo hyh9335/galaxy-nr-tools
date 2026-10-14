@@ -61,7 +61,7 @@ class ProjectChecks(unittest.TestCase):
         self.assertIn('FLAG_NOT_FOCUSABLE', src)
         self.assertIn('TYPE_APPLICATION_OVERLAY', src)
         self.assertIn('onProgress(String line)', reader)
-        self.assertIn('.version(3)', ACTIVITY.read_text())
+        self.assertIn('.version(4)', ACTIVITY.read_text())
         self.assertIn('SYSTEM_ALERT_WINDOW', manifest)
 
     def test_diagnostics_are_read_only_and_conservative(self):
@@ -82,6 +82,24 @@ class ProjectChecks(unittest.TestCase):
         self.assertIn('8&', script)
         self.assertIn('find_label "$ACTION"', script)
         self.assertNotIn('KEYCODE_BACK', script.split('try_menu_back_to_main()')[1].split('open_service_main()')[0])
+
+    def test_reboot_gated_by_successful_apply_only(self):
+        service = SERVICE.read_text()
+        interface=(ROOT / 'app/src/main/aidl/com/example/galaxy5gmanager/IGalaxyAutomation.aidl').read_text()
+        assert 'boolean canReboot() = 7;' in interface
+        assert 'boolean rebootDevice() = 8;' in interface
+        assert 'code == 0 && !cancelled && "apply".equals(mode)' in service
+        assert 'if (!canReboot()' in service
+        assert '"/system/bin/svc", "power", "reboot"' in service
+        assert 'showRebootDialog()' in ACTIVITY.read_text()
+
+    def test_selection_asterisk_kept_and_safe_alias(self):
+        source=ACTIVITY.read_text()
+        script=SCRIPT.read_text()
+        assert '[^A-Z0-9 /&()*' in source
+        assert 'MMWAVE ONLY ENABLE' in script
+        assert '选择标记不确定' in script
+        assert '已选中：无需重复点击' in script
 
     def test_gcf_navigation_not_relative_back(self):
         text = SCRIPT.read_text()

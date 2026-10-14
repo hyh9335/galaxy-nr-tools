@@ -7,5 +7,7 @@ interface IGalaxyAutomation {
     String getReport() = 4;
     void cancel() = 5;
     void setPageReader(IGalaxyPageReader reader) = 6;
+    boolean canReboot() = 7;
+    boolean rebootDevice() = 8;
     void destroy() = 16777114;
 }

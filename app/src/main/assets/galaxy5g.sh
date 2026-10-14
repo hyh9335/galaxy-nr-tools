@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.5.0
+VERSION=2.6.0
 UIA_UNAVAILABLE=0
 WORK=""
 PROFILE=core
@@ -137,22 +137,37 @@ read_page() {
 
 # find_label returns distinct menu target XY; exit=4 missing, exit=3 ambiguous.
 find_label() {
-  # Only NEXT PAGE can have OCR punctuation/arrow artifacts. Do not fuzzy
-  # match other engineering menu commands, which may alter radio settings.
+  # Only the verified NR5G Sub6/mmWave menu has a special selection marker.
+  # OCR occasionally strips the star: "ALL ENABLE (*)" -> "ALL ENABLE ()".
+  # For navigation/probe, accept both but ONLY when distinct sibling choices
+  # establish this is the intended page. A later write still checks selection
+  # markers separately and refuses ambiguous "()".
   awk -F '\t' -v want="$1" '
   function canonical(t) {
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
     gsub(/[[:space:]]+/, " ", t)
     if (want == "NEXT PAGE" &&
         t ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/) return "NEXT PAGE"
-    # On S25U Android 17, ML Kit reads the small ampersand as "8&".
-    # This is a read-only navigation label, NEVER a radio setting leaf.
     if (want == "UE SETTING & INFO" &&
         t ~ /^UE SETTING (8&|&) INFO$/) return "UE SETTING & INFO"
+    if (want == "ALL ENABLE" &&
+        t ~ /^ALL ENABLE([[:space:]]*\(\*?\))?$/) return "ALL ENABLE"
     return t
   }
-  canonical($1) == want { count++; x=$2; y=$3 }
-  END { if(count==1) {print x " " y; exit 0} if(count>1) exit 3; exit 4 }' "$MENU"
+  {
+    t=$1
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+    if (t == "SUB6 ONLY ENABLE") has_sub6=1
+    if (t == "MMWAVE ONLY ENABLE") has_mmwave=1
+    if (t == "DISABLE") has_disable=1
+    if (canonical($1) == want) { count++; x=$2; y=$3 }
+  }
+  END {
+    if (want == "ALL ENABLE" && !(has_sub6 && has_mmwave && has_disable)) exit 4
+    if(count==1) {print x " " y; exit 0}
+    if(count>1) exit 3
+    exit 4
+  }' "$MENU"
 }
 
 exists_label() {
@@ -340,12 +355,38 @@ run_step() {
     return 0
   fi
   exists_label "$ACTION" || fail "最终目标 [$ACTION] 不在菜单中。"
+  if [ "$idx" -eq 4 ]; then
+    # Explicitly distinguish navigable item from selection state. Samsung's
+    # star indicates selected; our OCR must not discard it. Never toggle an
+    # already-selected ALL ENABLE option, and never infer enabled from bare ().
+    marker_state="$(awk -F '\t' '
+      $1 ~ /^ALL ENABLE[[:space:]]*\(\*\)$/ { seen=1 }
+      $1 ~ /^ALL ENABLE[[:space:]]*\(\)$/ { unsure=1 }
+      END { if(seen) print "SELECTED"; else if(unsure) print "UNCERTAIN"; else print "UNSELECTED" }
+      ' "$MENU")"
+    if [ "$MODE" = 'probe' ]; then
+      case "$marker_state" in
+        SELECTED) log '[4] ALL ENABLE 带 (*)，已选中（页面标记，仅探测，未修改）';;
+        UNCERTAIN) log '[4] ALL ENABLE 后为 ()，OCR 未辨认选择标记；仅确认路径，不判定是否已开启';;
+        *) log '[4] 已定位 ALL ENABLE，未观察到选择标记；仅探测';;
+      esac
+      log "[$idx] 可访问：$ACTION（未点击）"
+      return 0
+    fi
+    case "$marker_state" in
+      SELECTED)
+        log '[4] ALL ENABLE (*) 已选中：无需重复点击；跳过本项修改。'
+        return 0;;
+      UNCERTAIN)
+        fail '[4] ALL ENABLE () 的选择标记不确定；为避免切换错误状态，未点击。请查看屏幕或重试探测。';;
+    esac
+  fi
   if [ "$MODE" = 'probe' ]; then
     log "[$idx] 可访问：$ACTION（未点击）"
     return 0
   fi
-  # Terminal writes MUST match exactly. OCR aliases only apply to safe menu
-  # navigation, never to REMOVE/ENABLE or other radio-modifying commands.
+  # Leaf writes must still resolve to one unique target and pass foreground
+  # checks. The special selection marker above is restricted to the SUB6 page.
   pos="$(find_label "$ACTION")"; rc=$?
   [ "$rc" -eq 0 ] || fail "最终目标 [$ACTION] 无法唯一定位。"
   set -- $pos

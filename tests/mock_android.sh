@@ -49,7 +49,7 @@ case "$command" in
      NR5G) labels='PRUNE STATUS|SUB6/MMWAVE|SA/NSA MODE CONTROL';;
      PRUNE) if [ "$variant" = already ];then labels='RESTORE NR5G PRUNE'; else labels='REMOVE NR5G PRUNE'; fi;;
      GCF) if [ "$variant" = missing ];then labels='';else labels='REMOVE ONLY NR WHITELIST';fi;;
-     SUB) labels='ALL ENABLE';;
+     SUB) case "$variant" in selected) labels='ALL ENABLE (*)|SUB6 ONLY ENABLE|MMWAVE ONLY ENABLE|DISABLE';; uncertain) labels='ALL ENABLE ()|SUB6 ONLY ENABLE|MMWAVE ONLY ENABLE|DISABLE';; *) labels='ALL ENABLE|SUB6 ONLY ENABLE|MMWAVE ONLY ENABLE|DISABLE';; esac;;
      SA) labels='SA/NSA ENABLE|REMOVE SA PERMIT LIST';;
      AFTER) labels='COMPLETED';;
      *) exit 12;;
@@ -99,7 +99,7 @@ case "$command" in
    NR5G) labels='PRUNE STATUS|SUB6/MMWAVE|SA/NSA MODE CONTROL';;
    PRUNE) if [ "$variant" = already ];then labels='RESTORE NR5G PRUNE';else labels='REMOVE NR5G PRUNE';fi;;
    GCF) if [ "$variant" = missing ];then labels='';else labels='REMOVE ONLY NR WHITELIST';fi;;
-   SUB) labels='ALL ENABLE';;
+   SUB) case "$variant" in selected) labels='ALL ENABLE (*)|SUB6 ONLY ENABLE|MMWAVE ONLY ENABLE|DISABLE';; uncertain) labels='ALL ENABLE ()|SUB6 ONLY ENABLE|MMWAVE ONLY ENABLE|DISABLE';; *) labels='ALL ENABLE|SUB6 ONLY ENABLE|MMWAVE ONLY ENABLE|DISABLE';; esac;;
    SA) labels='SA/NSA ENABLE|REMOVE SA PERMIT LIST';;
    AFTER) labels='COMPLETED';;
    *) exit 16;;

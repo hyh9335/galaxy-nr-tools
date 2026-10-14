@@ -54,7 +54,9 @@ public final class MainActivity extends Activity {
     private TelephonyManager telephony;
     private int lastOverrideType = -1;
     private TelephonyCallback diagnosticListener;
-    private Button permissionButton, overlayButton, statusButton, probeButton, applyCoreButton, applyFullButton, cancelButton;
+    private Button permissionButton, overlayButton, statusButton, probeButton, applyCoreButton, applyFullButton, cancelButton, rebootButton;
+    private boolean screenResumed;
+    private boolean rebootPromptShown;
     private String reportLast = "";
     private boolean active;
     private static final int PERMISSION_CODE = 4501;
@@ -119,7 +121,7 @@ public final class MainActivity extends Activity {
                         String label = line.getText().toUpperCase(Locale.ROOT).trim()
                             .replaceAll("^(?:\\[|\\()?[0-9]+(?:\\]|\\)|\\.|:)?\\s*", "")
                             .replaceAll("\\s+", " ")
-                            .replaceAll("[^A-Z0-9 /&()\\-]", "").trim();
+                            .replaceAll("[^A-Z0-9 /&()*\\-]", "").trim();
                         if (label.isEmpty() || label.length() > 140) continue;
                         int x = Math.min(info.outWidth - 1, Math.max(0, Math.round(box.centerX() * fx)));
                         int y = Math.min(info.outHeight - 1, Math.max(0, Math.round(box.centerY() * fy)));
@@ -177,6 +179,13 @@ public final class MainActivity extends Activity {
                     applyCoreButton.setEnabled(!busy);
                     applyFullButton.setEnabled(!busy);
                     cancelButton.setEnabled(busy);
+                    boolean canReboot = !busy && remote.canReboot();
+                    rebootButton.setEnabled(canReboot);
+                    rebootButton.setVisibility(canReboot ? View.VISIBLE : View.GONE);
+                    if (canReboot && !rebootPromptShown && screenResumed) {
+                        rebootPromptShown = true;
+                        showRebootDialog();
+                    }
                     if (!busy) stopKeepAlive();
                 } catch (Exception e) { showError(e); }
             }
@@ -194,6 +203,11 @@ public final class MainActivity extends Activity {
         Shizuku.addRequestPermissionResultListener(onPermission);
         handler.post(refresh);
         refreshConnection();
+    }
+
+    @Override protected void onPause() {
+        screenResumed = false;
+        super.onPause();
     }
 
     @Override protected void onDestroy() {
@@ -242,7 +256,7 @@ public final class MainActivity extends Activity {
             statusText.setText("连接 Shizuku UserService 中…");
             Shizuku.UserServiceArgs a = new Shizuku.UserServiceArgs(
                     new ComponentName(getPackageName(), PrivilegedService.class.getName()))
-                .processNameSuffix("galaxy5g").daemon(false).version(3).tag("galaxy5g-verified");
+                .processNameSuffix("galaxy5g").daemon(false).version(4).tag("galaxy5g-verified");
             Shizuku.bindUserService(a, connection);
         } catch (Exception e) { bindRequested = false; showError(e); }
     }
@@ -270,6 +284,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        screenResumed = true;
         if (overlayButton != null) overlayButton.setText(Settings.canDrawOverlays(this)
             ? "悬浮进度提示 · 已授权" : "开启悬浮进度提示（推荐）");
     }
@@ -290,6 +305,11 @@ public final class MainActivity extends Activity {
                 }
             }
             boolean ok = remote.startRun(script, mode, profile, confirmation);
+            if (ok) {
+                rebootPromptShown = false;
+                rebootButton.setEnabled(false);
+                rebootButton.setVisibility(View.GONE);
+            }
             if (!ok) { stopKeepAlive(); statusText.setText("无法启动：正在运行、身份不符或脚本完整性校验失败。"); }
             else { logText.setText("正在启动… 请保持屏幕解锁并让 ServiceMode 在前台。\n完成后返回这里查看记录。"); reportLast = ""; }
         } catch (Exception e) { stopKeepAlive(); showError(e); }
@@ -355,6 +375,25 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void showRebootDialog() {
+        new AlertDialog.Builder(this)
+            .setTitle("菜单恢复流程已完成，建议重启")
+            .setMessage("本次实际恢复流程已全部结束，但不代表已经验证基带 NV 和 5G 网络。重启会断开当前连接，且无 Root 的 Shizuku 通常需要重新启动。现在重启吗？")
+            .setNegativeButton("稍后重启", null)
+            .setPositiveButton("立即重启", (d, w) -> rebootNow())
+            .show();
+    }
+
+    private void rebootNow() {
+        if (remote == null) { statusText.setText("Shizuku 已断开，请手动重启。"); return; }
+        try {
+            if (!remote.canReboot()) { statusText.setText("仅在实际恢复流程全部成功后才允许重启。"); return; }
+            boolean sent = remote.rebootDevice();
+            statusText.setText(sent ? "已发送系统重启请求，等待设备重启…" : "重启请求失败，请查看执行日志或手动重启。");
+            if (sent) rebootButton.setEnabled(false);
+        } catch (Exception e) { showError(e); }
+    }
+
     private void confirmation(boolean full) {
         String profile = full ? "full" : "core";
         String confirmation = full ? "FULL" : "APPLY";
@@ -389,6 +428,8 @@ public final class MainActivity extends Activity {
         statusButton.setEnabled(connected); probeButton.setEnabled(connected);
         applyCoreButton.setEnabled(connected); applyFullButton.setEnabled(connected);
         cancelButton.setEnabled(false);
+        rebootButton.setEnabled(false);
+        rebootButton.setVisibility(View.GONE);
     }
 
     private void buildUi() {
@@ -420,6 +461,8 @@ public final class MainActivity extends Activity {
             .setMessage("已提交的基带菜单操作不会自动撤销。")
             .setNegativeButton("继续运行", null)
             .setPositiveButton("中止", (d, w) -> { try { if (remote != null) remote.cancel(); } catch (RemoteException e) { showError(e); } }).show());
+        rebootButton = action(c, "立即重启手机（仅恢复全部成功后可用）", v -> showRebootDialog());
+        rebootButton.setVisibility(View.GONE);
         label(c, "执行记录", 18, true);
         logText = label(c, "尚无操作记录。", 13, false);
         logText.setTextIsSelectable(true);
