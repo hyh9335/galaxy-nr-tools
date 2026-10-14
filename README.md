@@ -1,8 +1,16 @@
-# Galaxy 5G Manager （开发验证版 0.2）
+# Galaxy 5G Manager （开发验证版 0.4）
 
 针对美版 Galaxy S23 Ultra（SM-S918U/U1）和 S25 Ultra（SM-S938U/U1）的一款**手机本地** 5G ServiceMode 菜单自动化 Android 应用。使用 Shizuku 官方 UserService 接口，以 ADB Shell 权限执行内置、SHA-256 校验过的菜单导航脚本；**不要求 Root，不需要 Termux、aShell You 或电脑端 ADB 参与手机日常运行**。
 
-> ⚠ 目前交付的是完整 Android 工程，不是已经编译并在真机验证的 APK。这里的 12 项导航模拟测试和 6 项项目静态测试均不等价于 Android 构建通过或真机证明。工程操作有蜂窝网络设置风险；请在 S23U/S25U 真机先检查 ServiceMode 暗码是否可用，再使用探测功能。
+> ⚠ 目前交付的是完整 Android 工程，不是已经编译并在真机验证的 APK。这里的 28 项离线测试均不等价于 Android 构建通过或真机证明。工程操作有蜂窝网络设置风险；请在 S23U/S25U 真机先检查 ServiceMode 暗码是否可用，再使用探测功能。
+
+## Android 17 OCR 菜单箭头与悬浮反馈（v0.4）
+
+- 修复 OCR 将 `NEXT PAGE` 后面箭头识别为 `NEXT PAGE -|`、`NEXT PAGE >` 时的误报：只对该翻页菜单允许严格限定的末尾符号变体，其他写入菜单项仍严格匹配；多处匹配立即停止。
+- 增加独立的 Android `TYPE_APPLICATION_OVERLAY` 小型悬浮进度条：在进入 ServiceMode 时提示当前步骤和点击菜单；完成或异常时显示结果约十秒，随后自动消失。悬浮条 **不接收触摸、不抢焦点**，只在用户主动运行期间存在。
+- 首次使用应在主界面点击「开启悬浮进度提示」授予 Android **显示在其他应用上层** 权限。用户拒绝权限仍可选择无悬浮提示运行，完整日志保留在应用内。
+- Android 要求临时前台服务保持一条低优先级运行通知；**这条系统通知不是悬浮进度反馈**，无法在保活功能存在时完全取消。
+- 屏幕顶部窄条刻意避开实际菜单区，并设置禁止截图显示悬浮文字，减少 OCR 误识别。尚需 S25U/S23U 真机验证位置和 Android 17 行为。
 
 ## 功能
 
@@ -39,7 +47,7 @@
 python3 -m unittest discover -s tests -v
 ```
 
-其中 12 项为模拟 Android ServiceMode 页面和 ADB shell 的离线测试，另 6 项为工程静态/安全约束测试。
+测试包括模拟 ServiceMode 页面、OCR 箭头变体与工程静态/安全约束。
 
 ## 授权与归属
 

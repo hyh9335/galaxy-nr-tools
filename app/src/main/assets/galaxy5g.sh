@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.2.0
+VERSION=2.3.0
 UIA_UNAVAILABLE=0
 WORK=""
 PROFILE=core
@@ -137,8 +137,17 @@ read_page() {
 
 # find_label returns distinct menu target XY; exit=4 missing, exit=3 ambiguous.
 find_label() {
+  # Only NEXT PAGE can have OCR punctuation/arrow artifacts. Do not fuzzy
+  # match other engineering menu commands, which may alter radio settings.
   awk -F '\t' -v want="$1" '
-  $1 == want { count++; x=$2; y=$3 }
+  function canonical(t) {
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+    gsub(/[[:space:]]+/, " ", t)
+    if (want == "NEXT PAGE" &&
+        t ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/) return "NEXT PAGE"
+    return t
+  }
+  canonical($1) == want { count++; x=$2; y=$3 }
   END { if(count==1) {print x " " y; exit 0} if(count>1) exit 3; exit 4 }' "$MENU"
 }
 

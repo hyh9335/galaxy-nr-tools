@@ -26,6 +26,8 @@ import java.nio.charset.StandardCharsets;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.ParcelFileDescriptor;
+import android.provider.Settings;
+import android.net.Uri;
 import android.graphics.Point;
 import android.content.Context;
 import android.graphics.Rect;
@@ -45,7 +47,7 @@ public final class MainActivity extends Activity {
     private IGalaxyAutomation remote;
     private boolean bindRequested;
     private TextView statusText, logText;
-    private Button permissionButton, statusButton, probeButton, applyCoreButton, applyFullButton, cancelButton;
+    private Button permissionButton, overlayButton, statusButton, probeButton, applyCoreButton, applyFullButton, cancelButton;
     private String reportLast = "";
     private boolean active;
     private static final int PERMISSION_CODE = 4501;
@@ -73,11 +75,13 @@ public final class MainActivity extends Activity {
     private void stopKeepAlive() {
         if (keepAliveForRun) {
             keepAliveForRun = false;
-            try { stopService(new Intent(this, AutomationKeepAliveService.class)); }
-            catch (RuntimeException ignored) { }
+            AutomationKeepAliveService.finishIfIdle();
         }
     }
     private final IGalaxyPageReader pageReader = new IGalaxyPageReader.Stub() {
+        @Override public void onProgress(String line) {
+            AutomationKeepAliveService.publishLine(line);
+        }
         @Override public String recognize(ParcelFileDescriptor screenshot, int screenWidth, int screenHeight) {
             if (screenshot == null) return "ERROR: 截图文件描述符为空";
             Bitmap image = null;
@@ -232,6 +236,33 @@ public final class MainActivity extends Activity {
     }
 
     private void runAction(String mode, String profile, String confirmation) {
+        if (!"status".equals(mode) && !Settings.canDrawOverlays(this)) {
+            new AlertDialog.Builder(this)
+                .setTitle("开启悬浮进度提示")
+                .setMessage("需要允许在其他应用上层显示，才能在 ServiceMode 中看到每一步的进度。悬浮条不接收触摸，不会挡住菜单操作。授权后请再点击探测。")
+                .setPositiveButton("前往授权", (d, w) -> requestOverlayPermission())
+                .setNegativeButton("不显示悬浮条，仍继续", (d, w) -> runActionInternal(mode, profile, confirmation))
+                .show();
+            return;
+        }
+        runActionInternal(mode, profile, confirmation);
+    }
+
+    private void requestOverlayPermission() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        } catch (RuntimeException e) { showError(e); }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (overlayButton != null) overlayButton.setText(Settings.canDrawOverlays(this)
+            ? "悬浮进度提示 · 已授权" : "开启悬浮进度提示（推荐）");
+    }
+
+    private void runActionInternal(String mode, String profile, String confirmation) {
         if (remote == null) { requestPermission(); return; }
         try {
             if (remote.isRunning()) return;
@@ -305,6 +336,12 @@ public final class MainActivity extends Activity {
         label(c, "美版 S23 Ultra / S25 Ultra · SIM1 · 无 Root", 13, false);
         statusText = label(c, "正在检查 Shizuku…", 15, true);
         permissionButton = action(c, "连接 / 授权 Shizuku", v -> requestPermission());
+        overlayButton = action(c, "开启悬浮进度提示（推荐）", v -> {
+            if (Settings.canDrawOverlays(this))
+                new AlertDialog.Builder(this).setMessage("悬浮提示已授权，执行菜单探测时会自动显示。")
+                    .setPositiveButton("知道了", null).show();
+            else requestOverlayPermission();
+        });
         label(c, "第一步：检测和探测", 18, true);
         statusButton = action(c, "查看设备与固件状态（只读）", v -> runAction("status", "core", ""));
         probeButton = action(c, "探测六条菜单路径（不提交设置）", v -> runAction("probe", "full", ""));

@@ -142,6 +142,46 @@ class ServiceModeTests(unittest.TestCase):
     self.assertIn('Android 17',out)
     self.assertNotIn('uiautomator 不可用',out)
 
+  def test_android17_next_page_arrow_ocr_all_four_pages(self):
+    menus={
+      'MAIN':['UE SETTING & INFO'],'UE':['SETTING'],
+      'SETTING':['SYSTEM','PROTOCOL'],
+      'SYSTEM0':['NEXT PAGE -|','PAGE ZERO'],
+      'SYSTEM1':['NEXT PAGE -|','PAGE ONE'],
+      'SYSTEM2':['NEXT PAGE -|','PAGE TWO'],
+      'SYSTEM3':['NEXT PAGE -|','PAGE THREE'],
+      'SYSTEM4':['NEXT PAGE -|','SET LTE BAND CONFIG','PAGE FOUR'],
+      'LTE':['SET DEFAULT LTE BAND'], 'PROTOCOL':['NR5G','GCF'],
+      'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
+      'PRUNE':['REMOVE NR5G PRUNE'], 'GCF':['REMOVE ONLY NR WHITELIST'],
+      'SUB':['ALL ENABLE'], 'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
+    }
+    code,out,err,events=self.ocr_probe(lambda page: ''.join(
+      f'{s}\t210\t{150+100*i}\n' for i,s in enumerate(menus[page])))
+    self.assertEqual(code,0,out+'\n'+err)
+    self.assertEqual(events.count('tap:NEXT PAGE'),4)
+    self.assertEqual((self.base/'settings').read_text(),'')
+
+  def test_android17_next_page_arrow_ambiguous_stops(self):
+    def page(screen):
+      if screen == 'SYSTEM0':
+        return 'NEXT PAGE -|\t210\t150\nNEXT PAGE >\t220\t250\n'
+      menus={'MAIN':'UE SETTING & INFO','UE':'SETTING','SETTING':'SYSTEM'}
+      return f'{menus.get(screen,"NOT FOUND")}\t210\t150\n'
+    code,out,err,events=self.ocr_probe(page)
+    self.assertNotEqual(code,0)
+    self.assertIn('多个不同位置',err)
+    self.assertEqual((self.base/'settings').read_text(),'')
+
+  def test_android17_next_page_wrong_text_does_not_match(self):
+    def page(screen):
+      menus={'MAIN':'UE SETTING & INFO','UE':'SETTING','SETTING':'SYSTEM','SYSTEM0':'NEXT PAGE 2'}
+      return f'{menus.get(screen,"NOT FOUND")}\t210\t150\n'
+    code,out,err,events=self.ocr_probe(page)
+    self.assertNotEqual(code,0)
+    self.assertIn('NEXT PAGE',err)
+    self.assertEqual((self.base/'settings').read_text(),'')
+
   def test_android17_ocr_uncertain_stops_before_setting(self):
     code,out,err,events=self.ocr_probe(lambda screen:'ERROR: 受保护窗口')
     self.assertNotEqual(code,0)

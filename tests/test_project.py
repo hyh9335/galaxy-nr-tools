@@ -53,6 +53,16 @@ class ProjectChecks(unittest.TestCase):
         self.assertIn('android.permission.FOREGROUND_SERVICE_SPECIAL_USE', manifest)
         self.assertIn('android:foregroundServiceType="specialUse"', manifest)
 
+    def test_overlay_pass_through_and_binder_progress(self):
+        src = (ROOT / 'app/src/main/java/com/example/galaxy5gmanager/AutomationKeepAliveService.java').read_text()
+        reader = (ROOT / 'app/src/main/aidl/com/example/galaxy5gmanager/IGalaxyPageReader.aidl').read_text()
+        manifest = (ROOT / 'app/src/main/AndroidManifest.xml').read_text()
+        self.assertIn('FLAG_NOT_TOUCHABLE', src)
+        self.assertIn('FLAG_NOT_FOCUSABLE', src)
+        self.assertIn('TYPE_APPLICATION_OVERLAY', src)
+        self.assertIn('onProgress(String line)', reader)
+        self.assertIn('SYSTEM_ALERT_WINDOW', manifest)
+
     def test_gcf_navigation_not_relative_back(self):
         text = SCRIPT.read_text()
         self.assertIn('PROTOCOL|GCF', text)

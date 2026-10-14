@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  * The script's exact digest and argv are checked before execution.
  */
 public final class PrivilegedService extends IGalaxyAutomation.Stub {
-    private static final String SCRIPT_SHA256 = "2753a7f7027c6e1356566ab9a554839ff677a34e71d7bca34ce96db1792160f3";
+    private static final String SCRIPT_SHA256 = "c608ceb6122e57ccb59c76092f70613dc6cf28f778d15b031cf53a742b5d97b7";
     private final StringBuilder report = new StringBuilder();
     private volatile boolean running;
     private volatile Process child;
@@ -155,6 +155,13 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
     private synchronized void append(String line) {
         report.append(line).append('\n');
         if (report.length() > 50000) report.delete(0, report.length() - 40000);
+        // Report in parallel to the app's floating progress display. Never
+        // fail the navigation if the ordinary app process is interrupted.
+        IGalaxyPageReader callback = pageReader;
+        if (callback != null) {
+            try { callback.onProgress(line); }
+            catch (Exception ignored) { }
+        }
     }
 
     @Override public boolean isRunning() { return running; }
