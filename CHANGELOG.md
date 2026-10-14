@@ -1,3 +1,11 @@
+## v0.10.1-beta.1 — Dialer fallback regression fix (experimental)
+
+- Fixes v0.10.0 blocking before all digits on One UI when bundled offline OCR cannot resolve a complete keypad.
+- Retains full-keypad OCR tapping when verified. Otherwise, while Samsung Dialer is explicitly foreground, uses the v0.8-compatible `KEYCODE_STAR` / `KEYCODE_POUND` / `input text` route with settling delays, then attempts a single final `#`.
+- Does not press CALL or run an unbounded retry. Stops if the dialer loses foreground or the main ServiceMode menu cannot be confirmed.
+- Direct Activity and secret-code broadcast remain best-effort and are expected to be blocked by permissions on many unrooted Samsung builds.
+- The compatible fallback has not yet been validated on the user's S23 Ultra / S25 Ultra; this remains a prerelease.
+
 
 ### v0.10.0-beta.1 — Three-stage ServiceMode launch (experimental)
 

@@ -32,3 +32,5 @@ Choose **Core restore** (5 actions) or **Full restore** (all 6, including mmWave
 
 ## Privacy and logs
 Screenshots are transient and not uploaded by app code; text interpretation runs locally. The app may write the last complete build/profile/timestamp to `/sdcard/Download/Galaxy5G/`. Technical logs can include original Samsung menu text and legacy Chinese script messages even in English UI. Avoid posting any IMEI/IMSI, phone number, carrier credentials, or location in bug reports. Google ML Kit may collect SDK telemetry as documented in [PRIVACY.md](../PRIVACY.md).
+
+**Dialer compatibility:** The direct Activity and secret-code broadcast may be denied on stock One UI. If the dialpad OCR cannot recognize all keys, v0.10.1 uses the older Shell keyevent method *only while Samsung Dialer is foreground*, with extra delays. This may still fail on a firmware that ignores the final `#`; it never presses the call key. If it fails, capture the sanitized execution log and a screenshot of the dialer keypad, with personal phone numbers redacted.

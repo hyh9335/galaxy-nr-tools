@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.10.0
+VERSION=2.10.1
 UIA_UNAVAILABLE=1
 WORK=""
 PROFILE=core
@@ -378,22 +378,62 @@ verify_dialed_prefix() {
   END {exit !found}' "$MENU"
 }
 
+# When Samsung/ML Kit merges or omits keypad glyphs, the eleven digit
+# keys may still accept input via the same Shell KEYCODE path used by v0.8.
+# Never interpret OCR failure as an absent keypad. KEYCODE is sent ONLY after
+# the foreground is verified to be Samsung's dialer, and never sends CALL.
+# Last '#' is intentionally separate and delayed to allow the dialer to settle.
+dialer_keyevent_fallback() {
+  log '拨号键盘 OCR 未能确认全部按键：改用 v0.8 兼容的系统按键输入（仅三星拨号器）。'
+  is_dialer_foreground || fail '备用拨号时三星拨号器已经失焦。'
+  input keyevent KEYCODE_STAR >/dev/null 2>&1 || fail '备用输入开头 * 失败。'
+  sleep 0.35
+  is_dialer_foreground || fail '输入 * 后拨号器失焦。'
+  input keyevent KEYCODE_POUND >/dev/null 2>&1 || fail '备用输入开头 # 失败。'
+  sleep 0.4
+  is_dialer_foreground || fail '输入开头 # 后拨号器失焦。'
+  input text 27663368378 >/dev/null 2>&1 || fail '备用数字输入失败。'
+  sleep 0.8
+  is_dialer_foreground || { is_service_foreground && return 0; fail '数字输入期间拨号器失焦。'; }
+  # OCR of the number field is advisory: several One UI builds hide or split
+  # it into blocks. Do not repeat input based only on an OCR false negative.
+  if read_dialer_page; then
+    if verify_dialed_prefix; then
+      log '输入前缀：拨号器 OCR 已确认完整工程码前缀。'
+    else
+      log '输入前缀：OCR 未能确认完整字符；按键命令已执行，继续尝试唯一末尾 #（不重复输入数字）。'
+    fi
+  fi
+  is_dialer_foreground || fail '提交末尾 # 前拨号器已失焦。'
+  input keyevent KEYCODE_POUND >/dev/null 2>&1 || fail '备用输入最后 # 失败。'
+  sleep 0.7
+  if service_main_ready; then
+    log '入口 3/3：按键兼容路径成功进入 ServiceMode。'
+    return 0
+  fi
+  fail '已完成一次按键兼容输入，但未进入 ServiceMode；可能最后的 # 未被拨号器接收。请先检查屏幕上的号码，不会重复输入或发起电话呼叫。'
+}
+
 try_dialer_ocr() {
-  log '启动入口 3/3：检查拨号器键盘，OCR 定位 *、# 与数字键…'
+  log '启动入口 3/3：打开三星拨号器，优先定位真实键盘；识别不完整则使用兼容按键路径。'
   am start -W -a android.intent.action.DIAL >/dev/null 2>&1 || fail '无法打开拨号器。'
-  sleep 1.1
-  is_dialer_foreground || fail '拨号器尚未显示，禁止盲目输入工程码。'
+  sleep 1.2
+  is_dialer_foreground || fail '拨号器尚未显示，拒绝向未知应用注入按键。'
   read_dialer_page
-  keys="$WORK/keypad.tsv"
-  cp "$MENU" "$keys"
-  # Only start if a complete keypad grid is identified. Save positions before
-  # the dialed number is rendered (later OCR could detect unrelated digits).
+  : > "$WORK/positions.tsv"
+  complete_grid=1
   for key in 1 2 3 4 5 6 7 8 9 0 '*' '#'; do
-    locate_dial_key "$key" >> "$WORK/positions.tsv" || fail '无法从截图确认完整三星数字键盘（1–9、0、*、#）；停止，不使用固定坐标。'
+    if ! locate_dial_key "$key" >> "$WORK/positions.tsv"; then
+      complete_grid=0
+      break
+    fi
   done
-  # Code is deliberately split into individual touchscreen taps. Shell
-  # injection of KEYCODE_POUND has failed on both tested One UI versions.
-  # Positions ordered as 1..9,0,*,# in positions.tsv.
+  if [ "$complete_grid" -ne 1 ]; then
+    log "拨号器 OCR 可见文本（最多 8 项）：$(cut -f1 "$MENU" | head -n 8 | tr '\n' '|')"
+    dialer_keyevent_fallback
+    return $?
+  fi
+  log '已通过 OCR 校验完整拨号键盘，采用真实按钮逐键输入。'
   : > "$WORK/positions-sequence.tsv"
   for k in '*' '#' 2 7 6 6 3 3 6 8 3 7 8 '#'; do
     case "$k" in '*' ) index=11;; '#' ) index=12;; 0) index=10;; *) index="$k";; esac
@@ -406,20 +446,21 @@ try_dialer_ocr() {
     [ -n "$pos" ] || fail '内部按键映射缺失，停止输入。'
     set -- $pos
     input tap "$1" "$2" >/dev/null 2>&1 || fail '拨号键盘点击失败。'
-    sleep 0.18
+    sleep 0.23
     count=$((count+1))
     if [ "$count" -eq 14 ]; then
-      # The last # is special: first ensure all numeric digits landed.
-      sleep 0.45
+      sleep 0.55
       read_dialer_page
       if ! verify_dialed_prefix; then
-        log "拨号器 OCR 未确认完整工程码前缀，候选：$(cut -f1 "$MENU" | head -n 8 | tr '\n' '|')"
-        fail '无法确认工程码前缀是否完整，已停止；请手动输入工程码或提供拨号器截图。'
+        # The observed page may group or omit digits. For physical keypad
+        # input, we have already matched the complete grid and each tap.
+        # Do not repeatedly inject digits from an OCR false negative.
+        log 'OCR 未能确认完整号码前缀；每个真实按键已按序点击，仅尝试一次末尾 #。'
       fi
     fi
   done
   if service_main_ready; then log '入口 3/3：工程码成功打开 ServiceMode。'; return 0; fi
-  fail '已经提交结尾 #，但没有打开 ServiceMode；不追加字符或盲目重试。'
+  fail '已输入末尾 #，但没有进入 ServiceMode；请检查拨号器界面，不会继续追加或发起呼叫。'
 }
 
 open_service_main() {

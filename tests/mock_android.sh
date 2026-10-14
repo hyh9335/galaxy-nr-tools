@@ -40,7 +40,16 @@ case "$command" in
   case "$1" in
    text) printf '%s' "$2" >> "$base/keys";;
    keyevent)
-    case "$2" in KEYCODE_STAR) printf '*' >> "$base/keys";; KEYCODE_POUND) printf '#' >> "$base/keys";; esac
+    case "$2" in
+     KEYCODE_STAR) printf '*' >> "$base/keys"; echo keyevent_star >> "$base/events";;
+     KEYCODE_POUND)
+       if [ "$variant" = dialer_last_hash_dropped ] && [ "$(cat "$base/keys")" = '*#27663368378' ]; then
+         echo dropped_last_hash >> "$base/events"
+       else
+         printf '#' >> "$base/keys"
+         echo keyevent_pound >> "$base/events"
+       fi;;
+    esac
     if [ "$(cat "$base/keys")" = '*#27663368378#' ]; then
      echo MAIN > "$base/screen"; echo code_ok >> "$base/events"
     fi;;

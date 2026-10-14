@@ -16,7 +16,7 @@ class ServiceModeTests(unittest.TestCase):
   def tearDown(self): self.temp.cleanup()
   def mock_ocr_text(self, screen, variant):
     if screen == 'DIAL':
-      if variant == 'dialer_keyboard_missing': return 'CONTACTS\t200\t200\n'
+      if variant in ('dialer_keyboard_missing','dialer_last_hash_dropped'): return 'CONTACTS\t200\t200\n'
       rows = []
       for row, digits in enumerate(['123','456','789','*0#']):
         for col, key in enumerate(digits):
@@ -106,11 +106,35 @@ class ServiceModeTests(unittest.TestCase):
     self.assertNotIn('keyevent_pound', st['events'])
     self.assertEqual(st['settings'], [])
 
-  def test_missing_dialpad_grid_stops_before_any_key(self):
+  def test_incomplete_dialpad_ocr_uses_legacy_compatible_keyevents(self):
     proc, st = self.execute('probe', 'full', variant='dialer_keyboard_missing')
+    self.assertEqual(proc.returncode, 0, proc.stdout+'\n'+proc.stderr)
+    self.assertIn('兼容的系统按键输入', proc.stdout)
+    self.assertEqual(st['events'].count('code_ok'), 6)
+    self.assertNotIn('dial_tap:', '|'.join(st['events']))
+    self.assertIn('keyevent_pound', st['events'])
+    self.assertEqual(st['settings'], [])
+
+  def test_old_known_working_pound_and_text_fallback_is_foreground_guarded(self):
+    proc, st = self.execute('probe', 'full', variant='dialer_keyboard_missing')
+    self.assertEqual(proc.returncode, 0, proc.stdout+'\n'+proc.stderr)
+    self.assertIn('入口 3/3：按键兼容路径成功进入 ServiceMode', proc.stdout)
+    self.assertIn('keyevent_star', st['events'])
+    self.assertEqual(st['events'].count('keyevent_pound'), 12)
+
+  def test_dialer_ignores_final_pound_stops_without_radio_writes(self):
+    proc, st = self.execute('apply','full','FULL', variant='dialer_last_hash_dropped')
     self.assertNotEqual(proc.returncode, 0)
-    self.assertIn('无法从截图确认完整三星数字键盘', proc.stderr)
-    self.assertEqual([x for x in st['events'] if x.startswith('dial_tap:')], [])
+    self.assertIn('可能最后的 # 未被拨号器接收', proc.stderr)
+    self.assertIn('dropped_last_hash', st['events'])
+    self.assertEqual(st['settings'], [])
+    self.assertFalse((self.base/'output'/'last-SM-S938U.txt').exists())
+
+  def test_complete_keypad_still_prefers_ocr_taps_and_never_calls(self):
+    proc, st = self.execute('probe', 'full')
+    self.assertEqual(proc.returncode, 0, proc.stdout+'\n'+proc.stderr)
+    self.assertNotIn('keyevent_pound', st['events'])
+    self.assertIn('dial_tap:#', st['events'])
     self.assertEqual(st['settings'], [])
 
   def test_status_readonly(self):
@@ -443,7 +467,7 @@ class ServiceModeTests(unittest.TestCase):
     code,out,err,events=self.ocr_probe(screenshot)
     self.assertNotEqual(code,0)
     self.assertIn('不是可确认的主菜单',out)
-    self.assertIn('没有打开 ServiceMode',err)
+    self.assertIn('没有进入 ServiceMode',err)
     self.assertEqual((self.base/'settings').read_text(),'')
     self.assertLessEqual(out.count('@G5G_OCR_REQUEST@'),3)  # dialpad + prefix + ServiceMode
 
