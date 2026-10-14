@@ -64,6 +64,25 @@ class ProjectChecks(unittest.TestCase):
         self.assertIn('.version(3)', ACTIVITY.read_text())
         self.assertIn('SYSTEM_ALERT_WINDOW', manifest)
 
+    def test_diagnostics_are_read_only_and_conservative(self):
+        radio = (ROOT / 'app/src/main/java/com/example/galaxy5gmanager/NetworkDiagnostics.java').read_text()
+        manifest = (ROOT / 'app/src/main/AndroidManifest.xml').read_text()
+        self.assertIn('READ_PHONE_STATE', manifest)
+        self.assertIn('getDataNetworkType()', radio)
+        self.assertIn('不能据此判断 5G 被锁定', radio)
+        self.assertIn('不等于一定在毫米波', radio)
+        self.assertNotIn('getAllowedNetworkTypesForReason(', radio)
+        self.assertNotIn('getImei(', radio)
+
+    def test_state_machine_has_strict_settings_and_bounded_recovery(self):
+        script = SCRIPT.read_text()
+        self.assertIn('classify_page()', script)
+        self.assertIn('try_menu_back_to_main()', script)
+        self.assertIn('recovery_count', script)
+        self.assertIn('8&', script)
+        self.assertIn('find_label "$ACTION"', script)
+        self.assertNotIn('KEYCODE_BACK', script.split('try_menu_back_to_main()')[1].split('open_service_main()')[0])
+
     def test_gcf_navigation_not_relative_back(self):
         text = SCRIPT.read_text()
         self.assertIn('PROTOCOL|GCF', text)

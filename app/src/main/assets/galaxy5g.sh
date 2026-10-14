@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.3.0
+VERSION=2.5.0
 UIA_UNAVAILABLE=0
 WORK=""
 PROFILE=core
@@ -145,6 +145,10 @@ find_label() {
     gsub(/[[:space:]]+/, " ", t)
     if (want == "NEXT PAGE" &&
         t ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/) return "NEXT PAGE"
+    # On S25U Android 17, ML Kit reads the small ampersand as "8&".
+    # This is a read-only navigation label, NEVER a radio setting leaf.
+    if (want == "UE SETTING & INFO" &&
+        t ~ /^UE SETTING (8&|&) INFO$/) return "UE SETTING & INFO"
     return t
   }
   canonical($1) == want { count++; x=$2; y=$3 }
@@ -165,50 +169,111 @@ wait_for() {
   while [ "$attempts" -lt "$max_attempts" ]; do
     read_page
     if exists_label "$target" || { [ -n "$alt" ] && exists_label "$alt"; }; then return 0; fi
-    attempts=$((attempts+1)); sleep 0.5
+    attempts=$((attempts+1)); sleep 0.8
   done
   log "OCR 检测到的候选菜单（最多 18 行）："
   cut -f1 "$MENU" | head -n 18 | while IFS= read -r label; do log "候选：$label"; done
   fail "等待菜单 [$target] 失败${alt:+（备选：$alt）}。可能当前页面不是主菜单；已停止。"
 }
 
-# Do not use Android BACK: on ServiceMode it may jump multiple levels.
+# Read-only UI state classifier. A signature identifies an already-known page;
+# unknown states MUST NOT trigger taps. Never infer a state from the mobile
+# network icon or from only the word "SERVICEMODE".
+classify_page() {
+  if exists_label 'SET DEFAULT LTE BAND'; then say 'LTE_CONFIG'; return; fi
+  if exists_label 'SET LTE BAND CONFIG'; then say 'SYSTEM_LTE'; return; fi
+  if exists_label 'REMOVE NR5G PRUNE' || exists_label 'RESTORE NR5G PRUNE'; then say 'PRUNE'; return; fi
+  if exists_label 'REMOVE ONLY NR WHITELIST'; then say 'GCF'; return; fi
+  if exists_label 'SA/NSA ENABLE' && exists_label 'REMOVE SA PERMIT LIST'; then say 'SA_MODE'; return; fi
+  if exists_label 'ALL ENABLE'; then say 'SUB6'; return; fi
+  if exists_label 'PRUNE STATUS' && exists_label 'SA/NSA MODE CONTROL'; then say 'NR5G'; return; fi
+  if exists_label 'NR5G' && exists_label 'GCF'; then say 'PROTOCOL'; return; fi
+  if exists_label 'SYSTEM' && exists_label 'PROTOCOL'; then say 'SETTING'; return; fi
+  if exists_label 'UE SETTING & INFO'; then say 'MAIN'; return; fi
+  if exists_label 'SETTING'; then say 'UE'; return; fi
+  if exists_label 'NEXT PAGE'; then say 'SYSTEM_PAGE'; return; fi
+  say 'UNKNOWN'
+}
+
+# Only navigation clicks get a bounded recovery. The last radio-setting leaf is
+# intentionally NOT handled here and never retried automatically.
 tap_label() {
   label="$1"; next="$2"; alternate="${3:-}"
   read_page
   pos="$(find_label "$label")"; rc=$?
-  [ "$rc" -eq 0 ] || {
-    [ "$rc" -eq 3 ] && fail "菜单 [$label] 出现多个位置；拒绝猜测。"
-    fail "当前找不到唯一菜单 [$label]。可运行 inspect 检查实际文字。"
-  }
+  if [ "$rc" -eq 3 ]; then fail "菜单 [$label] 出现多个位置；拒绝猜测。"; fi
+  if [ "$rc" -ne 0 ]; then
+    LAST_RECOVERY_TARGET="$label"
+    log "状态机：找不到 [$label]，当前状态 $(classify_page)，准备重新定位。"
+    return 5
+  fi
   before="$(cksum "$MENU" | awk '{print $1 ":" $2}')"
   set -- $pos
   log "点击 [$label] ($1,$2)"
   input tap "$1" "$2" >/dev/null 2>&1 || fail "input tap [$label] 失败。"
-  sleep 0.5
+  # Give Samsung's modem menu time to settle before OCR. Transient layout
+  # changes must not be treated as an intermediate final state.
+  sleep 0.85
   changed=0; attempt=0
-  max_attempts=5
-  [ "$UIA_UNAVAILABLE" -eq 1 ] && max_attempts=2
+  max_attempts=3
   while [ "$attempt" -lt "$max_attempts" ]; do
     read_page
     now="$(cksum "$MENU" | awk '{print $1 ":" $2}')"
     [ "$now" != "$before" ] && changed=1
     if { exists_label "$next" || { [ -n "$alternate" ] && exists_label "$alternate"; }; } &&
        { [ "$label" != 'NEXT PAGE' ] || [ "$changed" -eq 1 ]; }; then
+      log "状态机：已验证转移 [$label] → [$next]"
       return 0
     fi
-    attempt=$((attempt+1)); sleep 0.35
+    attempt=$((attempt+1)); sleep 0.7
   done
-  log "当前候选菜单：$(cut -f1 "$MENU" | head -n 12 | tr '\n' '|')"
+  LAST_RECOVERY_TARGET="$label → $next"
+  log "状态机：转移 [$label] 后未找到 [$next]；状态=$(classify_page)；候选：$(cut -f1 "$MENU" | head -n 14 | tr '\n' '|')"
   if [ "$label" = 'NEXT PAGE' ] && [ "$changed" -eq 0 ]; then
     fail 'NEXT PAGE 点击后界面未变化，拒绝继续翻页。'
   fi
-  fail "点击 [$label] 后未出现 [$next]；可能菜单层级已变化。"
+  return 5
+}
+
+# Recovery hierarchy: (1) observe state, (2) verified ServiceMode Menu/Back,
+# (3) reenter secret-code main menu, (4) stop. Android KEYCODE_BACK is never
+# sent and the app menu is never blindly tapped without recognized controls.
+try_menu_back_to_main() {
+  attempts=0
+  while [ "$attempts" -lt 3 ]; do
+    read_page
+    state="$(classify_page)"
+    [ "$state" = MAIN ] && { log '状态机：已经回到主菜单'; return 0; }
+    # Opening the options popup alone is not a radio-setting mutation.
+    input keyevent KEYCODE_MENU >/dev/null 2>&1 || return 1
+    sleep 0.35
+    read_page
+    # ServiceMode options popup is uniquely recognized by KEY INPUT and BACK.
+    if ! exists_label 'KEY INPUT' || ! exists_label 'BACK'; then
+      log '状态机：没有识别到明确的 Menu/Back 菜单，不猜测，改用重进工程码。'
+      return 1
+    fi
+    pos="$(find_label 'BACK')"; rc=$?
+    [ "$rc" -eq 0 ] || return 1
+    set -- $pos
+    input tap "$1" "$2" >/dev/null 2>&1 || return 1
+    sleep 0.8
+    attempts=$((attempts+1))
+  done
+  read_page
+  [ "$(classify_page)" = MAIN ]
 }
 
 open_service_main() {
   # A new entry to main screen for EVERY item, never guess BACK-stack depth.
   if is_service_foreground; then
+    # Check actual state; continuing from a verified root is safer/faster than
+    # restarting the dialer. Unknown or nested pages use guarded reentry.
+    read_page
+    if [ "$(classify_page)" = MAIN ]; then
+      log '状态机：当前已经位于工程主菜单，继续导航。'
+      return 0
+    fi
     am force-stop com.sec.android.RilServiceModeApp >/dev/null 2>&1 || true
     am force-stop com.sec.android.app.servicemodeapp >/dev/null 2>&1 || true
     sleep 0.3
@@ -224,6 +289,7 @@ open_service_main() {
   while [ "$attempt" -lt 12 ]; do
     if is_service_foreground; then
       wait_for 'UE SETTING & INFO'
+      [ "$(classify_page)" = MAIN ] || fail '菜单虽包含 UE SETTING 字样但不是主菜单，已停止。'
       return 0
     fi
     attempt=$((attempt+1)); sleep 0.6
@@ -243,14 +309,30 @@ step_info() {
   esac
 }
 
-run_step() {
-  idx="$1"; step_info "$idx"; log "[$idx] $TITLE"
-  open_service_main
+navigate_parent_path() {
   oldIFS="$IFS"; IFS='|'; set -- $PARENTS; IFS="$oldIFS"
   while [ "$#" -gt 0 ]; do
     current="$1"; shift
     if [ "$#" -gt 0 ]; then next="$1"; alt=''; else next="$ACTION"; alt="$ALREADY"; fi
-    tap_label "$current" "$next" "$alt"
+    tap_label "$current" "$next" "$alt" || return 5
+  done
+  return 0
+}
+
+run_step() {
+  idx="$1"; step_info "$idx"; log "[$idx] $TITLE"
+  open_service_main
+  recovery_count=0
+  while ! navigate_parent_path; do
+    if [ "$recovery_count" -ge 1 ]; then
+      log "当前菜单：$(cut -f1 "$MENU" | head -n 16 | tr '\n' '|')"
+      fail "[$idx] 状态重新定位后仍未完成 [$LAST_RECOVERY_TARGET]；停止，不执行无线设置。"
+    fi
+    recovery_count=$((recovery_count+1))
+    log "[$idx] 状态机恢复：优先 Menu/Back，再从工程码重新进入；恢复上限一次。"
+    if ! try_menu_back_to_main; then
+      open_service_main
+    fi
   done
   read_page
   if [ -n "$ALREADY" ] && exists_label "$ALREADY"; then
@@ -262,7 +344,8 @@ run_step() {
     log "[$idx] 可访问：$ACTION（未点击）"
     return 0
   fi
-  # Last leaf action is deliberately not followed by a guess at an unknown next page.
+  # Terminal writes MUST match exactly. OCR aliases only apply to safe menu
+  # navigation, never to REMOVE/ENABLE or other radio-modifying commands.
   pos="$(find_label "$ACTION")"; rc=$?
   [ "$rc" -eq 0 ] || fail "最终目标 [$ACTION] 无法唯一定位。"
   set -- $pos

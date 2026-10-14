@@ -1,6 +1,10 @@
 package com.example.galaxy5gmanager;
 
 import android.app.Activity;
+import android.Manifest;
+import android.telephony.TelephonyCallback;
+import android.telephony.TelephonyDisplayInfo;
+import android.telephony.TelephonyManager;
 import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -46,11 +50,15 @@ public final class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private IGalaxyAutomation remote;
     private boolean bindRequested;
-    private TextView statusText, logText;
+    private TextView statusText, logText, diagnosticText;
+    private TelephonyManager telephony;
+    private int lastOverrideType = -1;
+    private TelephonyCallback diagnosticListener;
     private Button permissionButton, overlayButton, statusButton, probeButton, applyCoreButton, applyFullButton, cancelButton;
     private String reportLast = "";
     private boolean active;
     private static final int PERMISSION_CODE = 4501;
+    private static final int PHONE_PERMISSION_CODE = 4502;
 
     private final Shizuku.OnBinderReceivedListener onBinder = () -> runOnUiThread(this::refreshConnection);
     private final Shizuku.OnBinderDeadListener onDead = () -> runOnUiThread(() -> {
@@ -180,6 +188,7 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         buildUi();
         active = true;
+        telephony = getSystemService(TelephonyManager.class);
         Shizuku.addBinderReceivedListenerSticky(onBinder);
         Shizuku.addBinderDeadListener(onDead);
         Shizuku.addRequestPermissionResultListener(onPermission);
@@ -195,6 +204,9 @@ public final class MainActivity extends Activity {
         Shizuku.removeBinderReceivedListener(onBinder);
         Shizuku.removeBinderDeadListener(onDead);
         Shizuku.removeRequestPermissionResultListener(onPermission);
+        if (diagnosticListener != null && telephony != null) {
+            try { telephony.unregisterTelephonyCallback(diagnosticListener); } catch (Exception ignored) { }
+        }
         super.onDestroy();
     }
 
@@ -291,6 +303,58 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private static final class DisplayMonitor extends TelephonyCallback
+        implements TelephonyCallback.DisplayInfoListener {
+        private final MainActivity parent;
+        DisplayMonitor(MainActivity parent) { this.parent = parent; }
+        @Override public void onDisplayInfoChanged(TelephonyDisplayInfo info) {
+            parent.runOnUiThread(() -> {
+                parent.lastOverrideType = info.getOverrideNetworkType();
+                parent.renderNetworkDiagnostics();
+            });
+        }
+    }
+
+    private void diagnoseNetwork() {
+        if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.READ_PHONE_STATE}, PHONE_PERMISSION_CODE);
+            return;
+        }
+        if (diagnosticListener == null && telephony != null) {
+            try {
+                diagnosticListener = new DisplayMonitor(this);
+                telephony.registerTelephonyCallback(getMainExecutor(), diagnosticListener);
+            } catch (RuntimeException ex) {
+                diagnosticText.setText("系统网络显示回调不可用，仍可检测基础数据类型。" );
+            }
+        }
+        renderNetworkDiagnostics();
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PHONE_PERMISSION_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+                diagnoseNetwork();
+            else diagnosticText.setText("未授权电话状态，仅影响只读诊断，不影响菜单探测。" );
+        }
+    }
+
+    private void renderNetworkDiagnostics() {
+        if (diagnosticText == null) return;
+        NetworkDiagnostics.Result result = NetworkDiagnostics.inspect(this, lastOverrideType);
+        diagnosticText.setText(result.text);
+        if (result.has5gEvidence) {
+            getPreferences(MODE_PRIVATE).edit().putString("evidence_build", Build.FINGERPRINT)
+                .putLong("evidence_time", System.currentTimeMillis()).apply();
+        } else if (Build.FINGERPRINT.equals(
+                getPreferences(MODE_PRIVATE).getString("evidence_build", ""))) {
+            long when = getPreferences(MODE_PRIVATE).getLong("evidence_time", 0);
+            if (when > 0) diagnosticText.append("\n此固件此前观测过 5G 相关状态（历史记录，不代表现在连接或全部解锁）。");
+        }
+    }
+
     private void confirmation(boolean full) {
         String profile = full ? "full" : "core";
         String confirmation = full ? "FULL" : "APPLY";
@@ -342,10 +406,13 @@ public final class MainActivity extends Activity {
                     .setPositiveButton("知道了", null).show();
             else requestOverlayPermission();
         });
-        label(c, "第一步：检测和探测", 18, true);
+        label(c, "第一步：只读 5G 状态检查", 18, true);
+        action(c, "检查当前 5G 状态与能力边界", v -> diagnoseNetwork());
+        diagnosticText = label(c, "未检查。检测 LTE 不代表 5G 已禁用；NR 白名单及 mmWave 内部状态可能无法直接读取。", 13, false);
+        label(c, "第二步：工程菜单探测", 18, true);
         statusButton = action(c, "查看设备与固件状态（只读）", v -> runAction("status", "core", ""));
         probeButton = action(c, "探测六条菜单路径（不提交设置）", v -> runAction("probe", "full", ""));
-        label(c, "第二步：恢复设置", 18, true);
+        label(c, "第三步：必要时恢复设置", 18, true);
         applyCoreButton = action(c, "恢复基础 5G（五项）", v -> confirmation(false));
         applyFullButton = action(c, "完整恢复（含毫米波，六项）", v -> confirmation(true));
         cancelButton = action(c, "中止当前操作", v -> new AlertDialog.Builder(this)

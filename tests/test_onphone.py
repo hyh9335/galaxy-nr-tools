@@ -162,6 +162,31 @@ class ServiceModeTests(unittest.TestCase):
     self.assertEqual(events.count('tap:NEXT PAGE'),4)
     self.assertEqual((self.base/'settings').read_text(),'')
 
+  def test_s25u_android17_ocr_ampersand_8_artifact_full_probe(self):
+    menu = {
+      'MAIN':['PROTOCOL STATE','UE SETTING 8& INFO'],
+      'UE':['SETTING'], 'SETTING':['SYSTEM','PROTOCOL'],
+      'SYSTEM0':['NEXT PAGE -|','PAGE ZERO'],
+      'SYSTEM1':['NEXT PAGE -|','PAGE ONE'],
+      'SYSTEM2':['NEXT PAGE -|','PAGE TWO'],
+      'SYSTEM3':['NEXT PAGE -|','PAGE THREE'],
+      'SYSTEM4':['NEXT PAGE -|','SET LTE BAND CONFIG','PAGE FOUR'],
+      'LTE':['SET DEFAULT LTE BAND'], 'PROTOCOL':['NR5G','GCF'],
+      'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
+      'PRUNE':['REMOVE NR5G PRUNE'], 'GCF':['REMOVE ONLY NR WHITELIST'],
+      'SUB':['ALL ENABLE'], 'SA':['SA/NSA ENABLE','REMOVE SA PERMIT LIST'],
+    }
+    # Mock tap centers use row indices; the harmless header is NOT a tappable
+    # mock menu item, so return only the OCR-distorted actual root menu label.
+    def fake(page):
+      labels = menu[page] if page != 'MAIN' else ['UE SETTING 8& INFO']
+      return ''.join(f'{v}\t210\t{150+100*i}\n' for i,v in enumerate(labels))
+    code,out,err,events=self.ocr_probe(fake)
+    self.assertEqual(code,0,out+'\n'+err)
+    self.assertIn('NEXT PAGE',out)
+    self.assertEqual(events.count('tap:NEXT PAGE'),4)
+    self.assertEqual((self.base/'settings').read_text(), '')
+
   def test_android17_next_page_arrow_ambiguous_stops(self):
     def page(screen):
       if screen == 'SYSTEM0':
