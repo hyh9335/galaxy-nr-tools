@@ -61,6 +61,7 @@ class ProjectChecks(unittest.TestCase):
         self.assertIn('FLAG_NOT_FOCUSABLE', src)
         self.assertIn('TYPE_APPLICATION_OVERLAY', src)
         self.assertIn('onProgress(String line)', reader)
+        self.assertIn('.version(3)', ACTIVITY.read_text())
         self.assertIn('SYSTEM_ALERT_WINDOW', manifest)
 
     def test_gcf_navigation_not_relative_back(self):
