@@ -44,6 +44,33 @@ class ServiceModeTests(unittest.TestCase):
     self.assertEqual(s['events'].count('code_ok'),5)
     self.assertEqual((self.base/'output'/'last-SM-S938U.txt').read_text().splitlines()[0],'build-101')
 
+  def test_sa_enable_selected_still_removes_sa_permit_list(self):
+    p, st = self.execute('apply', 'full', 'FULL', variant='sa_selected')
+    self.assertEqual(p.returncode, 0, p.stdout+'\n'+p.stderr)
+    self.assertIn('[5] SA/NSA ENABLE (*) 已选中', p.stdout)
+    self.assertIn('REMOVE SA PERMIT LIST', st['settings'])
+    self.assertNotIn('SA/NSA ENABLE (*)', st['settings'])
+    self.assertEqual(len(st['settings']), 5)
+
+  def test_sa_selected_probe_checks_both_actions(self):
+    p, st = self.execute('probe', 'full', variant='sa_selected')
+    self.assertEqual(p.returncode, 0, p.stdout+'\n'+p.stderr)
+    self.assertIn('[5] SA/NSA ENABLE (*) 已选中', p.stdout)
+    self.assertIn('[6] 可访问：REMOVE SA PERMIT LIST（未点击）', p.stdout)
+    self.assertEqual(st['settings'], [])
+
+  def test_sa_uncertain_marker_refuses_apply(self):
+    p, st = self.execute('apply', 'full', 'FULL', variant='sa_uncertain')
+    self.assertNotEqual(p.returncode, 0)
+    self.assertIn('选择标记不确定', p.stderr)
+    self.assertNotIn('REMOVE SA PERMIT LIST', st['settings'])
+
+  def test_sa_uncertain_probe_still_reaches_permit_list(self):
+    p, st = self.execute('probe', 'full', variant='sa_uncertain')
+    self.assertEqual(p.returncode, 0, p.stdout+'\n'+p.stderr)
+    self.assertIn('[6] 可访问：REMOVE SA PERMIT LIST（未点击）', p.stdout)
+    self.assertEqual(st['settings'], [])
+
   def test_apply_full_s23u(self):
     p,s=self.execute('apply','full','FULL',model='SM-S918U1')
     self.assertEqual(p.returncode,0,p.stdout+'\n'+p.stderr)

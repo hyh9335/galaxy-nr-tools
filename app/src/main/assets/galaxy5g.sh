@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.6.0
+VERSION=2.7.0
 UIA_UNAVAILABLE=0
 WORK=""
 PROFILE=core
@@ -152,6 +152,9 @@ find_label() {
         t ~ /^UE SETTING (8&|&) INFO$/) return "UE SETTING & INFO"
     if (want == "ALL ENABLE" &&
         t ~ /^ALL ENABLE([[:space:]]*\(\*?\))?$/) return "ALL ENABLE"
+    # The SA/NSA choice also uses (*) for the selected option.
+    if (want == "SA/NSA ENABLE" &&
+        t ~ /^SA\/NSA ENABLE([[:space:]]*\(\*?\))?$/) return "SA/NSA ENABLE"
     return t
   }
   {
@@ -160,10 +163,12 @@ find_label() {
     if (t == "SUB6 ONLY ENABLE") has_sub6=1
     if (t == "MMWAVE ONLY ENABLE") has_mmwave=1
     if (t == "DISABLE") has_disable=1
+    if (t == "REMOVE SA PERMIT LIST") has_sa_permit=1
     if (canonical($1) == want) { count++; x=$2; y=$3 }
   }
   END {
     if (want == "ALL ENABLE" && !(has_sub6 && has_mmwave && has_disable)) exit 4
+    if (want == "SA/NSA ENABLE" && !has_sa_permit) exit 4
     if(count==1) {print x " " y; exit 0}
     if(count>1) exit 3
     exit 4
@@ -379,6 +384,30 @@ run_step() {
         return 0;;
       UNCERTAIN)
         fail '[4] ALL ENABLE () 的选择标记不确定；为避免切换错误状态，未点击。请查看屏幕或重试探测。';;
+    esac
+  fi
+  if [ "$idx" -eq 5 ]; then
+    marker_state="$(awk -F '\t' '
+      $1 ~ /^SA\/NSA ENABLE[[:space:]]*\(\*\)$/ { selected=1 }
+      $1 ~ /^SA\/NSA ENABLE[[:space:]]*\(\)$/ { uncertain=1 }
+      END { if(selected) print "SELECTED"; else if(uncertain) print "UNCERTAIN"; else print "UNSELECTED" }
+      ' "$MENU")"
+    if [ "$MODE" = 'probe' ]; then
+      case "$marker_state" in
+        SELECTED) log '[5] SA/NSA ENABLE (*) 已选中；仅探测，未修改';;
+        UNCERTAIN) log '[5] SA/NSA ENABLE () OCR 未认出星号；不能确认启用状态';;
+        *) log '[5] 已定位 SA/NSA ENABLE；未观察到选中标记';;
+      esac
+      log '[5] 提醒：第 6 项 REMOVE SA PERMIT LIST 是独立操作，仍需单独探测/执行。'
+      log "[$idx] 可访问：$ACTION（未点击）"
+      return 0
+    fi
+    case "$marker_state" in
+      SELECTED)
+        log '[5] SA/NSA ENABLE (*) 已选中：不重复点击；第 6 项 REMOVE SA PERMIT LIST 仍须执行。'
+        return 0;;
+      UNCERTAIN)
+        fail '[5] SA/NSA ENABLE () 选择标记不确定，未点击；也不能据此跳过单独的 SA permit list 操作。';;
     esac
   fi
   if [ "$MODE" = 'probe' ]; then
