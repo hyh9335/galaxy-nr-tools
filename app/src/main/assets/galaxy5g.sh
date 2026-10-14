@@ -5,8 +5,8 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.7.0
-UIA_UNAVAILABLE=0
+VERSION=2.8.0
+UIA_UNAVAILABLE=1
 WORK=""
 PROFILE=core
 MODE="${1:-help}"
@@ -43,7 +43,8 @@ check_device() {
   model="$(getprop ro.product.model 2>/dev/null)"
   build="$(getprop ro.build.version.incremental 2>/dev/null)"
   android="$(getprop ro.build.version.release 2>/dev/null)"
-  case "$android" in 17*) UIA_UNAVAILABLE=1; log 'Android 17：已跳过反复被终止的 uiautomator，直接使用本机 OCR';; esac
+  UIA_UNAVAILABLE=1
+  log '仅使用本机 OCR 识别 ServiceMode 菜单（不调用 UIAutomator）'
   case "$(printf %s "$manufacturer" | tr '[:upper:]' '[:lower:]')/$model" in
     samsung/SM-S918U|samsung/SM-S918U1|samsung/SM-S938U|samsung/SM-S938U1) ;;
     *) fail "未通过机型保护：厂商=$manufacturer 型号=$model。仅自动支持 S23U/S25U 美版 U/U1。";;
@@ -54,7 +55,6 @@ prepare() {
   base="${G5G_TMPBASE:-/data/local/tmp}"
   WORK="$base/g5g.$$.$(date +%s)"
   mkdir -p "$WORK" || fail '无法建立本机临时工作目录。'
-  XML="$WORK/hierarchy.xml"
   MENU="$WORK/menu.tsv"
   STATE_DIR="${G5G_STATE_DIR:-/sdcard/Download/Galaxy5G}"
 }
@@ -68,54 +68,13 @@ is_service_foreground() {
   printf '%s\n' "$focus" | grep -iE 'RilServiceModeApp|servicemodeapp|service.mode' >/dev/null 2>&1
 }
 
-# Parse raw UI Automator XML. Android usually puts every <node> on one line.
-# Extract exact label and its actual per-device bounds; normalize numeric prefixes.
-# Store only normalized label and center position, no IMEI/telephony identifiers.
-parse_xml() {
-  sed 's/></>\
-</g' "$XML" | awk '
-  function attr(s,k,  p,t,q) {
-    p=index(s,k "=\""); if(!p)return "";
-    t=substr(s,p+length(k)+2); q=index(t,"\"");
-    if(!q)return ""; return substr(t,1,q-1)
-  }
-  function clean(s) {
-    gsub(/&amp;/,"\\&",s);gsub(/&quot;/,"\"",s);gsub(/&apos;/,"\047",s);
-    gsub(/&lt;/,"<",s);gsub(/&gt;/,">",s);
-    sub(/^[[:space:]]+/,"",s); sub(/[[:space:]]+$/, "", s);
-    sub(/^\[[0-9]+\][[:space:]]*/, "",s);
-    sub(/^\([0-9]+\)[[:space:]]*/, "",s);
-    sub(/^[0-9]+[.):][[:space:]]*/, "",s);
-    gsub(/[[:space:]]+/," ",s); return toupper(s)
-  }
-  /<node[[:space:]]/ {
-    label=attr($0,"text"); if(label=="")label=attr($0,"content-desc");
-    label=clean(label); if(label=="")next;
-    b=attr($0,"bounds"); gsub(/\[/,"",b);gsub(/\]/," ",b);gsub(/,/," ",b);
-    n=split(b,p,/ +/); if(n<4)next;
-    x1=p[1]+0;y1=p[2]+0;x2=p[3]+0;y2=p[4]+0;
-    if(x2<=x1||y2<=y1)next;
-    x=int((x1+x2)/2); y=int((y1+y2)/2);
-    k=label "\t" x "\t" y;
-    if(!seen[k]++) print k;
-  }' > "$MENU" || fail 'UI XML 解析失败。'
-  [ -s "$MENU" ]
-}
-
-# Android 17 may reject uiautomator dump (e.g. when the window never becomes idle).
-# The UserService may provide an offline image OCR response through a private
-# /data/local/tmp file. No guessing screen positions, no external service.
+# Samsung engineering menus are drawn in views that can kill Android 17's
+# uiautomator process. Only our local offline screenshot/OCR channel is used.
+# Raw OCR text is normalized by a bounded page-aware matcher, not free-form
+# fuzzy string similarity. On ambiguity or lost focus, stop without touching.
 read_page() {
   is_service_foreground || fail '当前前台不是 ServiceMode；已中止，防止误点其他应用。'
-  rm -f "$XML" "$MENU"
-  if [ "$UIA_UNAVAILABLE" -eq 0 ]; then
-    if uiautomator dump "$XML" > "$WORK/uiautomator.txt" 2>&1 && [ -s "$XML" ] && parse_xml; then
-      return 0
-    fi
-    dump_error="$(head -n 5 "$WORK/uiautomator.txt" | tr '\n' ' ' | cut -c1-240)"
-    log "uiautomator 不可用：${dump_error:-无法解析页面}；改用 OCR"
-    UIA_UNAVAILABLE=1
-  fi
+  rm -f "$MENU"
   [ -n "${G5G_OCR_REPLY:-}" ] || fail '无离线 OCR 通道。请确认使用最新版 APK；不会盲点。'
   rm -f "$G5G_OCR_REPLY"
   say '@G5G_OCR_REQUEST@'
@@ -137,41 +96,64 @@ read_page() {
 
 # find_label returns distinct menu target XY; exit=4 missing, exit=3 ambiguous.
 find_label() {
-  # Only the verified NR5G Sub6/mmWave menu has a special selection marker.
-  # OCR occasionally strips the star: "ALL ENABLE (*)" -> "ALL ENABLE ()".
-  # For navigation/probe, accept both but ONLY when distinct sibling choices
-  # establish this is the intended page. A later write still checks selection
-  # markers separately and refuses ambiguous "()".
+  # Label mapping applies ONLY after the expected page can be recognized by
+  # independent siblings. Do not accept unknown edit distances or partial words.
+  # Raw marker (*) must be retained to detect already-selected radio settings.
   awk -F '\t' -v want="$1" '
-  function canonical(t) {
+  function strip(t) {
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
     gsub(/[[:space:]]+/, " ", t)
-    if (want == "NEXT PAGE" &&
-        t ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/) return "NEXT PAGE"
-    if (want == "UE SETTING & INFO" &&
-        t ~ /^UE SETTING (8&|&) INFO$/) return "UE SETTING & INFO"
-    if (want == "ALL ENABLE" &&
-        t ~ /^ALL ENABLE([[:space:]]*\(\*?\))?$/) return "ALL ENABLE"
-    # The SA/NSA choice also uses (*) for the selected option.
-    if (want == "SA/NSA ENABLE" &&
-        t ~ /^SA\/NSA ENABLE([[:space:]]*\(\*?\))?$/) return "SA/NSA ENABLE"
     return t
   }
+  function matched(t) {
+    if (t == want) return 1
+    if (want == "UE SETTING & INFO")
+      return t ~ /^UE SETTING (8&|&) INFO$/
+    if (want == "NEXT PAGE")
+      return t ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/
+    if (want == "SUB6/MMWAVE" && nr_page)
+      return t ~ /^(SUB6|SUB|SUBG|SUB5)[\/]MMWAVE$/
+    if (want == "SA/NSA MODE CONTROL" && nr_page)
+      return t == "SA/NSA MODE CONTR0L" || t == "SA/NSA MODE CONTRO1"
+    if (want == "SET LTE BAND CONFIG" && sys_page)
+      return t == "SET LTE BAND C0NFIG" || t == "SET LTE BAND CONF1G"
+    if (want == "ALL ENABLE" && sub_page)
+      return t ~ /^ALL ENABLE([[:space:]]*\(\*?\))?$/
+    if (want == "SA/NSA ENABLE" && sa_page)
+      return t ~ /^SA\/NSA ENABLE([[:space:]]*\(\*?\))?$/
+    # Permit-list is its own action, NEVER an alias of SA/NSA ENABLE.
+    if (want == "REMOVE SA PERMIT LIST" && sa_page)
+      return t == "REMOVE SA PERMIN LIST" || t == "REMOVE SA PERMIT L1ST"
+    return 0
+  }
   {
-    t=$1
-    gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
-    if (t == "SUB6 ONLY ENABLE") has_sub6=1
-    if (t == "MMWAVE ONLY ENABLE") has_mmwave=1
-    if (t == "DISABLE") has_disable=1
-    if (t == "REMOVE SA PERMIT LIST") has_sa_permit=1
-    if (canonical($1) == want) { count++; x=$2; y=$3 }
+    t[NR]=strip($1)
+    if (t[NR] == "PRUNE STATUS") has_prune=1
+    if (t[NR] == "SA/NSA MODE CONTROL" || t[NR] == "SA/NSA MODE CONTR0L" || t[NR] == "SA/NSA MODE CONTRO1") has_sa_nav=1
+    if (t[NR] == "SRS ENABLE/DISABLE" || t[NR] == "RRC CAP FEATURE PHY") has_nr_detail=1
+    if (t[NR] == "SUB6 ONLY ENABLE") has_sub6=1
+    if (t[NR] == "MMWAVE ONLY ENABLE") has_mmwave=1
+    if (t[NR] == "DISABLE") has_disable=1
+    if (t[NR] == "SA DISABLE") has_sa_disable=1
+    if (t[NR] == "NSA DISABLE") has_nsa_disable=1
+    if (t[NR] ~ /^REMOVE SA PERMI(T|N) (LIST|L1ST)$/) has_permit=1
+    if (t[NR] ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/) has_next=1
   }
   END {
-    if (want == "ALL ENABLE" && !(has_sub6 && has_mmwave && has_disable)) exit 4
-    if (want == "SA/NSA ENABLE" && !has_sa_permit) exit 4
-    if(count==1) {print x " " y; exit 0}
-    if(count>1) exit 3
+    nr_page = has_prune && has_sa_nav
+    sub_page = has_sub6 && has_mmwave && has_disable
+    sa_page = has_permit && (has_sa_disable || has_nsa_disable || !sub_page)
+    sys_page = has_next
+    if (want == "ALL ENABLE" && !sub_page) exit 4
+    if ((want == "SA/NSA ENABLE" || want == "REMOVE SA PERMIT LIST") && !sa_page) exit 4
+    count=0
+    for (i=1;i<=NR;i++) if (matched(t[i])) {count++; x=xs[i]; y=ys[i]}
+    if (count==1) {print x " " y; exit 0}
+    if (count>1) exit 3
     exit 4
+  }
+  {
+    xs[NR]=$2;ys[NR]=$3
   }' "$MENU"
 }
 

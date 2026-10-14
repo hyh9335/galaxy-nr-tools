@@ -14,13 +14,60 @@ class ServiceModeTests(unittest.TestCase):
       'MOCK_DIR':str(self.base), 'G5G_TMPBASE':str(self.base),'G5G_STATE_DIR':str(self.base/'output')}
 
   def tearDown(self): self.temp.cleanup()
+  def mock_ocr_text(self, screen, variant):
+    menu={
+      'MAIN':['UE SETTING & INFO'],
+      'UE':['SETTING'],
+      'SETTING':['SYSTEM','PROTOCOL'],
+      'SYSTEM0':['NEXT PAGE','PAGE ZERO'], 'SYSTEM1':['NEXT PAGE','PAGE ONE'],
+      'SYSTEM2':['NEXT PAGE','PAGE TWO'], 'SYSTEM3':['NEXT PAGE','PAGE THREE'],
+      'SYSTEM4':['NEXT PAGE','SET LTE BAND CONFIG','PAGE FOUR'],
+      'LTE':['SET DEFAULT LTE BAND'], 'PROTOCOL':['NR5G','GCF'],
+      'NR5G':['PRUNE STATUS','SUB6/MMWAVE','SA/NSA MODE CONTROL'],
+      'PRUNE':['RESTORE NR5G PRUNE' if variant=='already' else 'REMOVE NR5G PRUNE'],
+      'GCF':[] if variant=='missing' else ['REMOVE ONLY NR WHITELIST'],
+      'SUB':['ALL ENABLE (*)' if variant=='selected' else 'ALL ENABLE ()' if variant=='uncertain' else 'ALL ENABLE',
+             'SUB6 ONLY ENABLE','MMWAVE ONLY ENABLE','DISABLE'],
+      'SA':['SA/NSA ENABLE (*)' if variant=='sa_selected' else 'SA/NSA ENABLE ()' if variant=='sa_uncertain' else 'SA/NSA ENABLE',
+            'SA DISABLE','NSA DISABLE','REMOVE SA PERMIT LIST'],
+      'AFTER':['COMPLETED']
+    }
+    if screen=='UE' and variant=='ambiguous': menu['UE']=['SETTING','SETTING']
+    if variant=='ocr_realistic':
+      menu['MAIN']=['UE SETTING 8& INFO']
+      for key in ('SYSTEM0','SYSTEM1','SYSTEM2','SYSTEM3','SYSTEM4'):
+        menu[key][0]='NEXT PAGE -|'
+      menu['NR5G']=['PRUNE STATUS','SUB/MMWAVE','SA/NSA MODE CONTROL','RRC CAP FEATURE PHY']
+      menu['SUB']=['ALL ENABLE (*)','SUB6 ONLY ENABLE','MMWAVE ONLY ENABLE','DISABLE']
+      menu['SA']=['SA/NSA ENABLE (*)','SA DISABLE','NSA DISABLE','REMOVE SA PERMIT LIST']
+    return ''.join(f'{x}\t210\t{150+i*100}\n' for i,x in enumerate(menu.get(screen,[])))
+
   def execute(self, *args, variant='', model='SM-S938U'):
     for name,content in [('screen','NONE'),('events',''),('keys',''),('variant',variant),('model',model),('settings','')]:
       (self.base/name).write_text(content)
-    p=subprocess.run(['sh',str(SCRIPT),*args],capture_output=True,text=True,env=self.env,timeout=90)
-    def lines(name): return (self.base/name).read_text().splitlines()
-    return p, {'screen':(self.base/'screen').read_text().strip(),'events':lines('events'),
-               'settings':lines('settings'), 'model':model}
+    reply = self.base/'ocr-response.tsv'
+    env={**self.env, 'MOCK_ANDROID_RELEASE':'17', 'G5G_OCR_REPLY':str(reply)}
+    if variant=='no_ocr': env.pop('G5G_OCR_REPLY',None)
+    proc=subprocess.Popen(['sh',str(SCRIPT),*args],
+        stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env,bufsize=1)
+    lines=[]
+    try:
+      for line in proc.stdout:
+        lines.append(line)
+        if '@G5G_OCR_REQUEST@' in line:
+          page=(self.base/'screen').read_text().strip()
+          reply.write_text(self.mock_ocr_text(page,variant),encoding='utf-8')
+      err=proc.stderr.read()
+      proc.wait(timeout=30)
+      class Outcome: pass
+      result=Outcome();result.returncode=proc.returncode;result.stdout=''.join(lines);result.stderr=err
+      def contents(name):return (self.base/name).read_text().splitlines()
+      return result,{'screen':(self.base/'screen').read_text().strip(),'events':contents('events'),
+                     'settings':contents('settings'),'model':model}
+    finally:
+      if proc.poll() is None:proc.kill()
+      if proc.stdout:proc.stdout.close()
+      if proc.stderr:proc.stderr.close()
 
   def test_status_readonly(self):
     p,s=self.execute('status')
@@ -78,6 +125,27 @@ class ServiceModeTests(unittest.TestCase):
     self.assertIn('ALL ENABLE',s['settings'])
     self.assertNotIn('tap:BACK',s['events'])
 
+  def test_real_s25u_ocr_aliases_all_six_paths(self):
+    p,st=self.execute('probe','full',variant='ocr_realistic')
+    self.assertEqual(p.returncode,0,p.stdout+'\n'+p.stderr)
+    self.assertIn('[4] ALL ENABLE',p.stdout)
+    self.assertIn('[5] SA/NSA ENABLE (*) 已选中',p.stdout)
+    self.assertIn('[6] 可访问：REMOVE SA PERMIT LIST',p.stdout)
+    self.assertEqual(st['events'].count('tap:NEXT PAGE'),4)
+    self.assertEqual(st['settings'],[])
+
+  def test_real_s25u_sa_permit_independent_apply(self):
+    p,st=self.execute('apply','full','FULL',variant='ocr_realistic')
+    self.assertEqual(p.returncode,0,p.stdout+'\n'+p.stderr)
+    self.assertIn('REMOVE SA PERMIT LIST',st['settings'])
+    self.assertNotIn('SA/NSA ENABLE',st['settings'])
+    self.assertNotIn('ALL ENABLE',st['settings'])
+
+  def test_ocr_only_no_uiautomator_even_android16(self):
+    p,st=self.execute('probe','core')
+    self.assertEqual(p.returncode,0,p.stdout+'\n'+p.stderr)
+    self.assertIn('不调用 UIAutomator',p.stdout)
+
   def test_missing_permission_confirmation(self):
     p,s=self.execute('apply','full','APPLY')
     self.assertNotEqual(p.returncode,0)
@@ -112,12 +180,11 @@ class ServiceModeTests(unittest.TestCase):
     self.assertIn('前台不是 ServiceMode',p.stderr)
     self.assertEqual(s['settings'],[])
 
-  def test_uiautomator_failure_stops(self):
-    p,s=self.execute('apply','core','APPLY',variant='dumpfail')
+  def test_without_ocr_channel_stops_safely(self):
+    p,st=self.execute('apply','core','APPLY',variant='no_ocr')
     self.assertNotEqual(p.returncode,0)
-    self.assertIn('uiautomator 不可用',p.stdout)
     self.assertIn('无离线 OCR 通道',p.stderr)
-    self.assertEqual(s['settings'],[])
+    self.assertEqual(st['settings'],[])
 
   def ocr_probe(self, reply_factory):
     for name,content in [('screen','NONE'),('events',''),('keys',''),('variant','dumpfail'),('model','SM-S938U'),('settings','')]:

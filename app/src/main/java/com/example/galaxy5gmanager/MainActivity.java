@@ -22,6 +22,9 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.ImageView;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
 import android.widget.TextView;
 import rikka.shizuku.Shizuku;
 import java.io.ByteArrayOutputStream;
@@ -51,6 +54,8 @@ public final class MainActivity extends Activity {
     private IGalaxyAutomation remote;
     private boolean bindRequested;
     private TextView statusText, logText, diagnosticText;
+    private LinearLayout logPanel;
+    private boolean logsExpanded = false;
     private TelephonyManager telephony;
     private int lastOverrideType = -1;
     private TelephonyCallback diagnosticListener;
@@ -173,6 +178,10 @@ public final class MainActivity extends Activity {
                     if (!reportLast.equals(report)) {
                         reportLast = report;
                         logText.setText(report.isEmpty() ? "尚无操作记录。" : report);
+                        if (report.contains("流程异常终止") || report.contains("停止：")) {
+                            if (logPanel != null) logPanel.setVisibility(View.VISIBLE);
+                            logsExpanded = true;
+                        }
                     }
                     statusButton.setEnabled(!busy);
                     probeButton.setEnabled(!busy);
@@ -432,41 +441,162 @@ public final class MainActivity extends Activity {
         rebootButton.setVisibility(View.GONE);
     }
 
+    // Compact dark cards, clear primary/secondary actions and no giant scroll of
+    // default Material buttons. All controls are native Android widgets.
+    private static final int BG = Color.rgb(9, 15, 28);
+    private static final int SURFACE = Color.rgb(21, 32, 52);
+    private static final int PANEL = Color.rgb(28, 42, 65);
+    private static final int WHITE = Color.rgb(240, 246, 255);
+    private static final int MUTED = Color.rgb(160, 175, 198);
+    private static final int BLUE = Color.rgb(38, 119, 246);
+    private static final int TEAL = Color.rgb(17, 135, 112);
+    private static final int PURPLE = Color.rgb(103, 65, 207);
+
+    private GradientDrawable rounded(int color, int radius, int strokeColor) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(radius));
+        if (strokeColor != 0) drawable.setStroke(dp(1), strokeColor);
+        return drawable;
+    }
+    private TextView heading(LinearLayout parent, String value, int sp, boolean bold, int color) {
+        TextView view = new TextView(this);
+        view.setText(value); view.setTextSize(sp); view.setTextColor(color);
+        view.setGravity(Gravity.CENTER_VERTICAL);
+        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        parent.addView(view);
+        return view;
+    }
+    private LinearLayout section(LinearLayout container) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackground(rounded(SURFACE, 18, Color.rgb(39, 55, 82)));
+        panel.setPadding(dp(16), dp(15), dp(16), dp(15));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = dp(13);
+        container.addView(panel, params);
+        return panel;
+    }
+    private void space(LinearLayout p, int size) {
+        View v = new View(this);
+        p.addView(v, new LinearLayout.LayoutParams(1, dp(size)));
+    }
+    private Button button(LinearLayout parent, String title, int background, View.OnClickListener cb) {
+        Button b = new Button(this);
+        b.setText(title); b.setTextSize(13); b.setTextColor(WHITE);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setAllCaps(false);
+        b.setElevation(dp(1));
+        b.setPadding(dp(6), 0, dp(6), 0);
+        b.setBackground(rounded(background, 13, 0));
+        b.setOnClickListener(cb);
+        LinearLayout.LayoutParams param = new LinearLayout.LayoutParams(-1, dp(49));
+        param.bottomMargin = dp(7);
+        parent.addView(b,param);
+        return b;
+    }
+    private LinearLayout horizontal(LinearLayout parent) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        parent.addView(row, new LinearLayout.LayoutParams(-1,-2));
+        return row;
+    }
+    private Button tile(LinearLayout row, String title, int bgColor, View.OnClickListener cb) {
+        Button b = new Button(this);
+        b.setText(title); b.setTextSize(13); b.setTextColor(WHITE);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setAllCaps(false); b.setBackground(rounded(bgColor, 13, 0));
+        b.setOnClickListener(cb);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(68), 1f);
+        params.setMargins(dp(3),dp(3),dp(3),dp(3));
+        row.addView(b, params);
+        return b;
+    }
+
     private void buildUi() {
-        ScrollView s = new ScrollView(this); s.setFillViewport(true);
-        LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(22), dp(26), dp(22), dp(24)); c.setBackgroundColor(Color.rgb(250, 251, 253));
-        s.addView(c); setContentView(s);
-        label(c, "Galaxy 5G 管理器", 26, true);
-        label(c, "美版 S23 Ultra / S25 Ultra · SIM1 · 无 Root", 13, false);
-        statusText = label(c, "正在检查 Shizuku…", 15, true);
-        permissionButton = action(c, "连接 / 授权 Shizuku", v -> requestPermission());
-        overlayButton = action(c, "开启悬浮进度提示（推荐）", v -> {
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
+        getWindow().getDecorView().setSystemUiVisibility(0);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(BG);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(24), dp(18), dp(30));
+        scroll.addView(content); setContentView(scroll);
+
+        LinearLayout top = horizontal(content);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(com.example.galaxy5gmanager.R.drawable.ic_launcher);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams imageParams = new LinearLayout.LayoutParams(dp(65), dp(65));
+        imageParams.rightMargin = dp(12);
+        top.addView(icon, imageParams);
+        LinearLayout brand = new LinearLayout(this);brand.setOrientation(LinearLayout.VERTICAL);
+        top.addView(brand, new LinearLayout.LayoutParams(0,-2,1f));
+        heading(brand,"Galaxy 5G Manager",22,true,WHITE);
+        heading(brand,"S23U / S25U 美版 · Android 17",12,false,MUTED);
+        space(content,13);
+
+        LinearLayout connection = section(content);
+        heading(connection,"◆  SHIZUKU 与设备状态",12,true,Color.rgb(109,184,252));
+        space(connection,8);
+        statusText = heading(connection,"正在连接 Shizuku…",14,true,WHITE);
+        space(connection,10);
+        permissionButton = button(connection,"连接 / 授权 Shizuku",PANEL, v -> requestPermission());
+        overlayButton = button(connection,"悬浮进度提示 · 点击设置",PANEL, v -> {
             if (Settings.canDrawOverlays(this))
-                new AlertDialog.Builder(this).setMessage("悬浮提示已授权，执行菜单探测时会自动显示。")
-                    .setPositiveButton("知道了", null).show();
+                new AlertDialog.Builder(this).setMessage("悬浮条已授权。运行菜单探测时会显示实时进度，不挡住操作。")
+                    .setPositiveButton("知道了",null).show();
             else requestOverlayPermission();
         });
-        label(c, "第一步：只读 5G 状态检查", 18, true);
-        action(c, "检查当前 5G 状态与能力边界", v -> diagnoseNetwork());
-        diagnosticText = label(c, "未检查。检测 LTE 不代表 5G 已禁用；NR 白名单及 mmWave 内部状态可能无法直接读取。", 13, false);
-        label(c, "第二步：工程菜单探测", 18, true);
-        statusButton = action(c, "查看设备与固件状态（只读）", v -> runAction("status", "core", ""));
-        probeButton = action(c, "探测六条菜单路径（不提交设置）", v -> runAction("probe", "full", ""));
-        label(c, "第三步：必要时恢复设置", 18, true);
-        applyCoreButton = action(c, "恢复基础 5G（五项）", v -> confirmation(false));
-        applyFullButton = action(c, "完整恢复（含毫米波，六项）", v -> confirmation(true));
-        cancelButton = action(c, "中止当前操作", v -> new AlertDialog.Builder(this)
+
+        LinearLayout diagnostics = section(content);
+        heading(diagnostics,"01   5G 状态 · 只读检测",16,true,WHITE);
+        space(diagnostics,7);
+        heading(diagnostics,"当前 4G 不代表 5G 被锁；工程白名单不能仅凭信号判断。",12,false,MUTED);
+        space(diagnostics,10);
+        button(diagnostics,"检查 5G 网络与能力",TEAL, v -> diagnoseNetwork());
+        diagnosticText = heading(diagnostics,"尚未检测。",12,false,MUTED);
+        diagnosticText.setTextIsSelectable(true);
+
+        LinearLayout automations = section(content);
+        heading(automations,"02   ServiceMode · 自动化",16,true,WHITE);
+        space(automations,7);
+        heading(automations,"先探测，再按需恢复。OCR 在手机本地运行。",12,false,MUTED);
+        space(automations,11);
+        probeButton = button(automations,"探测六条菜单路径 · 不修改设置",BLUE, v -> runAction("probe","full",""));
+        LinearLayout options = horizontal(automations);
+        statusButton = tile(options,"设备 / 固件状态",PANEL, v -> runAction("status","core",""));
+        Button openLogs = tile(options,"查看执行记录",PANEL, v -> {
+            logsExpanded = !logsExpanded;
+            logPanel.setVisibility(logsExpanded ? View.VISIBLE : View.GONE);
+        });
+        space(automations,8);
+        heading(automations,"恢复设置 · 涉及基带参数，请谨慎",12,true,Color.rgb(255,198,104));
+        space(automations,6);
+        LinearLayout restores = horizontal(automations);
+        applyCoreButton = tile(restores,"恢复基础 5G",PURPLE, v -> confirmation(false));
+        applyFullButton = tile(restores,"完整恢复 · 含 mmWave",BLUE, v -> confirmation(true));
+        cancelButton = button(automations,"中止当前操作",Color.rgb(112,49,63),v -> new AlertDialog.Builder(this)
             .setTitle("确认中止？")
-            .setMessage("已提交的基带菜单操作不会自动撤销。")
-            .setNegativeButton("继续运行", null)
-            .setPositiveButton("中止", (d, w) -> { try { if (remote != null) remote.cancel(); } catch (RemoteException e) { showError(e); } }).show());
-        rebootButton = action(c, "立即重启手机（仅恢复全部成功后可用）", v -> showRebootDialog());
+            .setMessage("已经提交的设置无法自动撤销。")
+            .setNegativeButton("继续",null)
+            .setPositiveButton("中止",(d,w)->{try {if(remote!=null)remote.cancel();}catch(RemoteException e){showError(e);}}).show());
+        rebootButton = button(automations,"恢复全部完成 · 立即重启手机",TEAL,v -> showRebootDialog());
         rebootButton.setVisibility(View.GONE);
-        label(c, "执行记录", 18, true);
-        logText = label(c, "尚无操作记录。", 13, false);
+
+        logPanel = section(content);
+        heading(logPanel,"执行记录",16,true,WHITE);
+        space(logPanel,7);
+        heading(logPanel,"失败时会自动展开。长按文字可以复制。",12,false,MUTED);
+        space(logPanel,8);
+        logText = heading(logPanel,"尚无操作记录。",12,false,WHITE);
         logText.setTextIsSelectable(true);
-        label(c, "使用条件：屏幕解锁、亮屏、三星原生拨号器工程码可用。\n操作后请手动重启并验证移动网络。没有 Root 的 Shizuku 重启后通常需要重新启动。\n本工具不自动刷机、不写 NV 原始地址，也不保证运营商一定提供 5G 服务。", 13, false);
+        logPanel.setVisibility(View.GONE);
+        space(content,3);
+        heading(content,"所有图像识别都在设备本地完成。仅修改已明确确认的工程菜单项；失败时安全停止。",12,false,MUTED);
         updateButtons(false);
     }
 }
