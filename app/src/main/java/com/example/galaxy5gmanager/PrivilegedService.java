@@ -8,6 +8,11 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.io.ByteArrayOutputStream;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import java.util.concurrent.TimeUnit;
+
 
 /**
  * Runs in Shizuku's UserService process (ADB shell UID 2000 or root UID 0).
@@ -15,14 +20,17 @@ import java.util.Arrays;
  * The script's exact digest and argv are checked before execution.
  */
 public final class PrivilegedService extends IGalaxyAutomation.Stub {
-    private static final String SCRIPT_SHA256 = "b5d81f5937b589137394dd59dc617b30678c1688fb2ea6491ecf29be640c83bd";
+    private static final String SCRIPT_SHA256 = "e10aa8efaf4029bed6767fde6d8e64ee6f1c0941f1af050fdd6bb1f434970795";
     private final StringBuilder report = new StringBuilder();
     private volatile boolean running;
     private volatile Process child;
     private volatile boolean cancelled;
+    private volatile IGalaxyPageReader pageReader;
     private Thread worker;
 
     public PrivilegedService() { }
+
+    @Override public void setPageReader(IGalaxyPageReader reader) { this.pageReader = reader; }
 
     @Override public int shellUid() { return android.os.Process.myUid(); }
 
@@ -55,6 +63,7 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
 
     private void runJob(String script, String mode, String profile, String confirmation) {
         File scriptFile = null;
+        File replyFile = null;
         Process p = null;
         try {
             scriptFile = File.createTempFile("galaxy5g-", ".sh", new File("/data/local/tmp"));
@@ -66,8 +75,11 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
                 append("执行开始前已中止；没有启动脚本。");
                 return;
             }
+            replyFile = File.createTempFile("galaxy5g-ocr-", ".tsv", new File("/data/local/tmp"));
+            if (!replyFile.delete()) throw new java.io.IOException("OCR 临时文件无法初始化");
             ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", scriptFile.getAbsolutePath(),
                 mode, profile, confirmation);
+            pb.environment().put("G5G_OCR_REPLY", replyFile.getAbsolutePath());
             pb.redirectErrorStream(true);
             p = pb.start();
             child = p;
@@ -75,7 +87,11 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
                 p.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    append(line);
+                    if ("@G5G_OCR_REQUEST@".equals(line)) {
+                        performOcr(replyFile);
+                    } else {
+                        append(line);
+                    }
                 }
             }
             int code = p.waitFor();
@@ -88,8 +104,58 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
             child = null;
             if (p != null) p.destroy();
             if (scriptFile != null && scriptFile.exists()) scriptFile.delete();
+            if (replyFile != null && replyFile.exists()) replyFile.delete();
             running = false;
         }
+    }
+
+    // Screenshot is taken only after the script verifies ServiceMode foreground.
+    // The screenshot is sent over a private Binder callback to the app's bundled
+    // offline OCR model. Never persist the image or upload any contents.
+    private void performOcr(File replyFile) {
+        File shot = null;
+        String result;
+        try {
+            if (cancelled) throw new java.io.IOException("已取消");
+            IGalaxyPageReader callback = pageReader;
+            if (callback == null || !callback.asBinder().isBinderAlive())
+                throw new java.io.IOException("离线 OCR 回调未连接，请重新打开管理器");
+            shot = File.createTempFile("g5g-shot-", ".png", new File("/data/local/tmp"));
+            Process grab = new ProcessBuilder("/system/bin/screencap", "-p", shot.getAbsolutePath()).start();
+            if (!grab.waitFor(8, TimeUnit.SECONDS)) {
+                grab.destroyForcibly();
+                throw new java.io.IOException("screencap 超时");
+            }
+            if (grab.exitValue() != 0) throw new java.io.IOException("screencap 返回 " + grab.exitValue());
+            Bitmap original = BitmapFactory.decodeFile(shot.getAbsolutePath());
+            if (original == null) throw new java.io.IOException("ServiceMode 截图无法解码，可能受系统保护");
+            int w = original.getWidth(), h = original.getHeight();
+            int tw = Math.min(w, 1080), th = Math.round((float) h * tw / w);
+            Bitmap small = tw == w ? original : Bitmap.createScaledBitmap(original, tw, th, true);
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            if (!small.compress(Bitmap.CompressFormat.JPEG, 82, bytes))
+                throw new java.io.IOException("屏幕压缩失败");
+            if (small != original) small.recycle();
+            original.recycle();
+            if (bytes.size() > 850000) throw new java.io.IOException("截图过大，禁止 Binder 传输");
+            append("UIAutomator 失败，尝试本机离线截图文字识别（仅 ServiceMode）…");
+            result = callback.recognize(bytes.toByteArray(), w, h);
+            if (result == null || result.isEmpty()) result = "ERROR: 没有识别到菜单文字";
+            if (result.length() > 25000) result = "ERROR: 识别数据长度异常";
+        } catch (Exception e) {
+            result = "ERROR: " + e.getClass().getSimpleName() + " " + e.getMessage();
+            append("离线 OCR 请求失败：" + e.getMessage());
+        } finally {
+            if (shot != null) shot.delete();
+        }
+        // Only the fixed bridge file is writable, not arbitrary caller paths.
+        try {
+            File temp = new File(replyFile.getAbsolutePath() + ".part");
+            try (FileOutputStream output = new FileOutputStream(temp)) {
+                output.write(result.getBytes(StandardCharsets.UTF_8));
+            }
+            if (!temp.renameTo(replyFile)) throw new java.io.IOException("OCR 回复文件重命名失败");
+        } catch (Exception e) { append("OCR 通道写入失败：" + e.getMessage()); }
     }
 
     private synchronized void append(String line) {

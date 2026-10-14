@@ -1,8 +1,8 @@
-# Galaxy 5G Manager （开发验证版 0.1）
+# Galaxy 5G Manager （开发验证版 0.2）
 
 针对美版 Galaxy S23 Ultra（SM-S918U/U1）和 S25 Ultra（SM-S938U/U1）的一款**手机本地** 5G ServiceMode 菜单自动化 Android 应用。使用 Shizuku 官方 UserService 接口，以 ADB Shell 权限执行内置、SHA-256 校验过的菜单导航脚本；**不要求 Root，不需要 Termux、aShell You 或电脑端 ADB 参与手机日常运行**。
 
-> ⚠ 目前交付的是完整 Android 工程，不是已经编译并在真机验证的 APK。这里的 12 项导航模拟测试和 5 项项目静态测试均不等价于 Android 构建通过或真机证明。工程操作有蜂窝网络设置风险；请在 S23U/S25U 真机先检查 ServiceMode 暗码是否可用，再使用探测功能。
+> ⚠ 目前交付的是完整 Android 工程，不是已经编译并在真机验证的 APK。这里的 12 项导航模拟测试和 6 项项目静态测试均不等价于 Android 构建通过或真机证明。工程操作有蜂窝网络设置风险；请在 S23U/S25U 真机先检查 ServiceMode 暗码是否可用，再使用探测功能。
 
 ## 功能
 
@@ -39,10 +39,23 @@
 python3 -m unittest discover -s tests -v
 ```
 
-其中 12 项为模拟 Android ServiceMode 页面和 ADB shell 的离线测试，另 5 项为工程静态/安全约束测试。
+其中 12 项为模拟 Android ServiceMode 页面和 ADB shell 的离线测试，另 6 项为工程静态/安全约束测试。
 
 ## 授权与归属
 
 - 本应用原生 Java/Gradle 工程及菜单脚本使用 MIT 许可。
 - Shizuku API / Provider 为 [Shizuku-API](https://github.com/RikkaApps/Shizuku-API) 项目，MIT 许可；**本应用不是 Shizuku 官方产品**，不复制其商标资源。
 - 项目仅依赖 Shizuku 的运行时授权；不修改 Shizuku、Knox、Bootloader 和系统基带固件。
+
+
+## 云端构建验证（2026-10-14）
+
+- GitHub Actions 构建成功：`https://github.com/hyh9335/galaxy5g-manager/actions/runs/38506467653`
+- 18 项离线测试通过，`assembleDebug` 成功，上传的 APK 已校验 ZIP 完整性与内置脚本 SHA-256。
+- 仍未在 S23U/S25U 上完成真机运行验证，首次只能使用只读状态和菜单探测。
+
+## Android 17 UIAutomator 兼容修复 (0.2)
+
+SM-S938U Android 17 上，部分 ServiceMode 页面会让 `uiautomator dump` 返回失败。新版保留 UIAutomator 文字控件识别，失败时在记录里显示该命令的原始错误摘要，并通过 Shizuku shell 的 screencap 截图，在本应用内调用打包的 ML Kit Latin OCR 离线识别菜单文字和坐标，不新增应用、不上传截图。截图在临时目录中随即删除。
+
+OCR 无法取图、没有识别到菜单、重复相同文字或点击后页面没有发生预计变化时终止，不按预设屏幕坐标猜点击。首次使用仍只建议“探测六条菜单路径”，未获真机验证之前不要执行任何实际基带写入。

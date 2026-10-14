@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.0.0
+VERSION=2.1.0
 WORK=""
 PROFILE=core
 MODE="${1:-help}"
@@ -97,18 +97,45 @@ parse_xml() {
     k=label "\t" x "\t" y;
     if(!seen[k]++) print k;
   }' > "$MENU" || fail 'UI XML 解析失败。'
-  [ -s "$MENU" ] || fail 'UI Automator 没有读到任何文字控件；停止而不盲点。'
+  [ -s "$MENU" ]
 }
 
+# Android 17 may reject uiautomator dump (e.g. when the window never becomes idle).
+# The UserService may provide an offline image OCR response through a private
+# /data/local/tmp file. No guessing screen positions, no external service.
 read_page() {
   is_service_foreground || fail '当前前台不是 ServiceMode；已中止，防止误点其他应用。'
   rm -f "$XML" "$MENU"
-  # No screenshots, no accessibility scraping of other apps.
-  if ! uiautomator dump "$XML" > "$WORK/uiautomator.txt" 2>&1; then
-    fail 'uiautomator dump 失败；当前系统可能阻止 UI 层级读取。'
+  tries=0
+  while [ "$tries" -lt 2 ]; do
+    if uiautomator dump "$XML" > "$WORK/uiautomator.txt" 2>&1 && [ -s "$XML" ]; then
+      if parse_xml; then return 0; fi
+      dump_error='uiautomator 返回的 XML 没有可用文字控件'
+    else
+      dump_error="$(head -n 5 "$WORK/uiautomator.txt" | tr '\n' ' ' | cut -c1-240)"
+      [ -n "$dump_error" ] || dump_error='命令返回非零或 XML 文件为空'
+    fi
+    tries=$((tries+1))
+    [ "$tries" -lt 2 ] && sleep 1
+  done
+  log "uiautomator dump 失败：$dump_error"
+  [ -n "${G5G_OCR_REPLY:-}" ] || fail '无离线 OCR 通道。请确认使用最新版 APK；不会盲点。'
+  rm -f "$G5G_OCR_REPLY"
+  say '@G5G_OCR_REQUEST@'
+  n=0
+  while [ "$n" -lt 60 ] && [ ! -f "$G5G_OCR_REPLY" ]; do
+    sleep 0.2
+    n=$((n+1))
+  done
+  [ -f "$G5G_OCR_REPLY" ] || fail '离线 OCR 响应超时；请检查手机电源管理和执行记录。'
+  if grep '^ERROR:' "$G5G_OCR_REPLY" >/dev/null 2>&1; then
+    fail "离线 OCR 失败：$(head -n 1 "$G5G_OCR_REPLY" | cut -c1-220)"
   fi
-  [ -s "$XML" ] || fail 'uiautomator 未写入页面 XML。'
-  parse_xml
+  # Strict TSV: label / x / y. Invalid or empty responses must NOT cause a tap.
+  awk -F '\t' 'NF!=3 || $1=="" || $2!~/^[0-9]+$/ || $3!~/^[0-9]+$/ {bad=1} END {exit bad}' "$G5G_OCR_REPLY" || fail '离线 OCR 返回了无效菜单格式。'
+  [ -s "$G5G_OCR_REPLY" ] || fail '离线 OCR 未识别出任何菜单文字，可能是防截图/受保护窗口。'
+  cp "$G5G_OCR_REPLY" "$MENU" || fail '无法保存本机 OCR 菜单结果。'
+  is_service_foreground || fail 'OCR 完成后 ServiceMode 失焦；未执行点击。'
 }
 
 # find_label returns distinct menu target XY; exit=4 missing, exit=3 ambiguous.

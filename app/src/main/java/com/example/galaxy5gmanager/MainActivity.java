@@ -23,6 +23,18 @@ import rikka.shizuku.Shizuku;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Rect;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.Text;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.TextRecognizer;
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
+import com.google.android.gms.tasks.Tasks;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
+
 
 /** Chinese UI. The actual automation is run by the Shizuku UserService. */
 public final class MainActivity extends Activity {
@@ -46,6 +58,45 @@ public final class MainActivity extends Activity {
             else statusText.setText("未授予 Shizuku 权限。可返回 Shizuku 管理授权后重试。");
         });
     };
+    private final IGalaxyPageReader pageReader = new IGalaxyPageReader.Stub() {
+        @Override public String recognize(byte[] jpeg, int screenWidth, int screenHeight) {
+            if (jpeg == null || jpeg.length == 0 || screenWidth <= 0 || screenHeight <= 0)
+                return "ERROR: 无效截图";
+            try {
+                Bitmap image = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+                if (image == null) return "ERROR: 截图解码失败";
+                final int width = image.getWidth(), height = image.getHeight();
+                if (width < 200 || height < 200) return "ERROR: 截图尺寸不合理";
+                float fx = (float) screenWidth / width;
+                float fy = (float) screenHeight / height;
+                StringBuilder rows = new StringBuilder();
+                try (TextRecognizer recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)) {
+                    Text found = Tasks.await(recognizer.process(InputImage.fromBitmap(image, 0)),
+                        9, TimeUnit.SECONDS);
+                    for (Text.TextBlock block : found.getTextBlocks()) {
+                        for (Text.Line line : block.getLines()) {
+                            Rect box = line.getBoundingBox();
+                            if (box == null || box.isEmpty()) continue;
+                            String label = line.getText().toUpperCase(Locale.ROOT).trim()
+                                .replaceAll("^(?:\\[|\\()?[0-9]+(?:\\]|\\)|\\.|:)?\\s*", "")
+                                .replaceAll("\\s+", " ")
+                                .replaceAll("[^A-Z0-9 /&()\\-]", "").trim();
+                            if (label.length() == 0 || label.length() > 140) continue;
+                            int x = Math.min(screenWidth - 1, Math.max(0,
+                                Math.round(box.centerX() * fx)));
+                            int y = Math.min(screenHeight - 1, Math.max(0,
+                                Math.round(box.centerY() * fy)));
+                            rows.append(label).append('\t').append(x).append('\t').append(y).append('\n');
+                        }
+                    }
+                } finally { image.recycle(); }
+                return rows.length() > 0 ? rows.toString() : "ERROR: OCR 未识别到文字，可能是受保护窗口";
+            } catch (Exception e) {
+                return "ERROR: " + e.getClass().getSimpleName() + " " + e.getMessage();
+            }
+        }
+    };
+
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
             remote = IGalaxyAutomation.Stub.asInterface(binder);
@@ -56,7 +107,8 @@ public final class MainActivity extends Activity {
                         statusText.setText("不安全的执行身份 UID=" + uid + "，禁止使用。");
                         remote = null; updateButtons(false); return;
                     }
-                    statusText.setText("Shizuku 已连接 · UID=" + uid + " · " + Build.MODEL);
+                    remote.setPageReader(pageReader);
+                    statusText.setText("Shizuku 已连接 · UID=" + uid + " · " + Build.MODEL + " · 离线 OCR 已就绪");
                     updateButtons(true);
                 } catch (Exception e) { showError(e); }
             });
@@ -140,7 +192,7 @@ public final class MainActivity extends Activity {
             statusText.setText("连接 Shizuku UserService 中…");
             Shizuku.UserServiceArgs a = new Shizuku.UserServiceArgs(
                     new ComponentName(getPackageName(), PrivilegedService.class.getName()))
-                .processNameSuffix("galaxy5g").daemon(false).version(1).tag("galaxy5g-verified");
+                .processNameSuffix("galaxy5g").daemon(false).version(2).tag("galaxy5g-verified");
             Shizuku.bindUserService(a, connection);
         } catch (Exception e) { bindRequested = false; showError(e); }
     }
@@ -150,6 +202,7 @@ public final class MainActivity extends Activity {
         try {
             if (remote.isRunning()) return;
             String script = readAsset();
+            remote.setPageReader(pageReader);
             boolean ok = remote.startRun(script, mode, profile, confirmation);
             if (!ok) statusText.setText("无法启动：正在运行、身份不符或脚本完整性校验失败。");
             else { logText.setText("正在启动… 请保持屏幕解锁并让 ServiceMode 在前台。\n完成后返回这里查看记录。"); reportLast = ""; }
