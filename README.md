@@ -1,78 +1,73 @@
-# Galaxy 5G Manager （开发验证版 0.4）
+# Galaxy NR Tools
 
-针对美版 Galaxy S23 Ultra（SM-S918U/U1）和 S25 Ultra（SM-S938U/U1）的一款**手机本地** 5G ServiceMode 菜单自动化 Android 应用。使用 Shizuku 官方 UserService 接口，以 ADB Shell 权限执行内置、SHA-256 校验过的菜单导航脚本；**不要求 Root，不需要 Termux、aShell You 或电脑端 ADB 参与手机日常运行**。
+[简体中文](README.zh-CN.md) · [Download releases](https://github.com/hyh9335/galaxy-nr-tools/releases) · [User guide](docs/USER_GUIDE.md) · [Features](docs/FEATURES.md) · [Privacy](PRIVACY.md)
 
-> ⚠ 目前交付的是完整 Android 工程，不是已经编译并在真机验证的 APK。这里的 28 项离线测试均不等价于 Android 构建通过或真机证明。工程操作有蜂窝网络设置风险；请在 S23U/S25U 真机先检查 ServiceMode 暗码是否可用，再使用探测功能。
+**A community-built, unofficial Android companion for observing 5G network evidence and navigating Samsung ServiceMode radio settings with Shizuku.** No root required. Designed for US Galaxy S23 and newer **U/U1** variants. **Experimental beta; only Galaxy S25 Ultra (SM-S938U, Android 17) has been observed in real-world menu walkthroughs.**
 
-## Android 17 OCR 菜单箭头与悬浮反馈（v0.4）
+![Original Galaxy NR Tools icon](docs/assets/icon.png)
 
-- 修复 OCR 将 `NEXT PAGE` 后面箭头识别为 `NEXT PAGE -|`、`NEXT PAGE >` 时的误报：只对该翻页菜单允许严格限定的末尾符号变体，其他写入菜单项仍严格匹配；多处匹配立即停止。
-- 增加独立的 Android `TYPE_APPLICATION_OVERLAY` 小型悬浮进度条：在进入 ServiceMode 时提示当前步骤和点击菜单；完成或异常时显示结果约十秒，随后自动消失。悬浮条 **不接收触摸、不抢焦点**，只在用户主动运行期间存在。
-- 首次使用应在主界面点击「开启悬浮进度提示」授予 Android **显示在其他应用上层** 权限。用户拒绝权限仍可选择无悬浮提示运行，完整日志保留在应用内。
-- Android 要求临时前台服务保持一条低优先级运行通知；**这条系统通知不是悬浮进度反馈**，无法在保活功能存在时完全取消。
-- 屏幕顶部窄条刻意避开实际菜单区，并设置禁止截图显示悬浮文字，减少 OCR 误识别。尚需 S25U/S23U 真机验证位置和 Android 17 行为。
+## Why it exists
 
-## 功能
+Samsung's ServiceMode contains engineering menus that differ across firmware releases and carriers. Galaxy NR Tools uses offline OCR on screenshots and a strictly bounded, page-aware navigation state machine instead of screen coordinates or `uiautomator dump` (which can be killed on recent One UI/Android versions). It distinguishes menu *reachability* from settings *being active*, and never equates LTE coverage with a disabled 5G radio.
 
-- 「连接 / 授权 Shizuku」：请求官方 Shizuku 权限，仅在服务确实具备 UID 2000/0 时允许运行。
-- 「设备状态」：识别三星美版机型、安卓和固件，不修改参数。
-- 「探测六条菜单路径」：通过模拟拨号、UI Automator 层级 XML 和当前实际位置查找菜单，不点击各项设置的最终按钮。
-- 「恢复基础 5G」：执行 LTE 默认频段、NR PRUNE、NR 白名单、SA/NSA ENABLE 和移除 SA permit list 共 5 项，跳过 mmWave。
-- 「完整恢复」：六项，包括 Sub6/mmWave ALL ENABLE。**执行前会显示二次确认弹窗**。
-- 「中止」「查看执行记录」：终止剩余自动化；已经提交的设置无法自动撤销。
+## Highlights
 
-## 已知限制
+- **Read-only 5G diagnostics** from public Android telephony APIs. A 5G indicator is not proof of current NR attachment or modem NV state.
+- **Six-path probe**: locates engineering menu actions without pressing their final setting buttons.
+- **Core/full restore**: deliberate, confirmed flows with guardrails; full mode includes mmWave.
+- **Offline OCR** in the app process; screenshot data is handled locally. Page aliases are context checked (for example `SUB/MMWAVE`, `NEXT PAGE -|`, `SA/NSA ENABLE (*)`).
+- **Automatic return attempt** to the app when finished, only while ServiceMode is still foreground; a notification fallback is available where the OS blocks the return.
+- **Follows system light/dark mode and system language**. English is the default for other languages; simplified Chinese is provided.
+- **Responsive compact interface**, adaptive/monochrome launcher icons, floating progress (optional), detailed logs, and restart request after a complete *apply*.
 
-- 只能处理 **SIM1**；不自动操作其他型号、SIM2、其他厂商或未知菜单。
-- Shizuku 无 Root 启动后通常在手机**重启后需要再次启动**；没有实现开机全自动静默运行。
-- 系统更新可能改变 ServiceMode 名称或禁用工程码；无法可靠读取菜单时会停止，不会根据坐标盲点。
-- 设备必须**解锁并保持屏幕亮着**。自动操作会调起拨号器和 ServiceMode，因此 App 可能暂时进入后台；完成后返回应用看日志。
-- 仅能确定操作是否成功导航到菜单以及点击最终项，**不能独立读取 NV 确认修改已持久化**。恢复成功与否还依赖手机硬件、运营商、SA 开通及实际信号。
-- 无任何联网、上传或读取 IMEI/IMSI 的逻辑。状态记录写入 `/sdcard/Download/Galaxy5G`。
+## Compatibility and safety
 
-## 构建 APK（Android SDK 35 / JDK 17 / Gradle 8.9）
+| Category | Availability |
+|---|---|
+| Android | Android 11+ build target; Android 17 OCR path included; exact behavior depends on firmware |
+| Read-only network diagnostics | Any Android device providing required public telephony APIs, with permission |
+| Automated ServiceMode navigation | Listed **US U/U1** Galaxy S23/S24/S25/S26 S-series variants; other regions excluded |
+| Most tested physical device | Galaxy S25 Ultra **SM-S938U / Android 17** (user menu logs; **not full independent radio NV verification**) |
+| Root / KNOX unlock | **Neither required** |
+| SIM | SIM1 only |
 
-1. 安装 Android Studio（或 Android SDK CLI）、JDK 17。安装 SDK Platform 35、Build Tools 35.0.0。
-2. 打开本目录作为 Gradle 工程。项目使用 AGP `8.7.3`、Shizuku API/Provider `13.1.5`。
-3. 运行 `gradle :app:assembleDebug`，或在 Android Studio 中选择 Build APK。
-4. 产物位于 `app/build/outputs/apk/debug/app-debug.apk`。
+Supported U/U1 SKU families in the current allowlist: **S711/S911/S916/S918** (S23 / FE), **S721/S921/S926/S928** (S24 / FE), **S731/S931/S936/S937/S938** (S25 / FE / Edge), and **S741/S942/S947/S948** (S26 / FE). *These are recognized model identifiers, NOT a claim that every firmware's secret code and submenu is compatible.* Unknown variants fail closed. Support requests for additional models should include redacted, read-only menu evidence.
 
-如果在自己的 GitHub 私有仓库上传此工程，`.github/workflows/android-debug.yml` 可通过 Actions 的 **Run workflow** 构建并保存 debug APK；此步骤需要仓库的 Actions 权限和网络。注意 CI 的临时 debug 签名密钥可能在后续构建时变化，更新时需注意签名一致性；不要将私钥上传到公开仓库。
+**IMPORTANT:** Incorrect cellular engineering settings can cause connectivity loss. A successful tap is not modem NV verification. This app does not modify arbitrary baseband bytes, bypass carrier provisioning, guarantee 5G reception, or independently prove that PRUNE/whitelist/mmWave restrictions were removed.
 
-首次安装 APK 后，在 Shizuku 中确认服务已运行，打开此应用授权。建议顺序：**查看设备状态 → 探测菜单（不提交）→ 检查日志 → 再考虑基础/完整恢复**。修改基带设置前应确保能承担短时无信号或网络丢失风险。
+## Quick start
 
-## 自动测试
+1. Download the APK from [GitHub Releases](https://github.com/hyh9335/galaxy-nr-tools/releases). This initial public beta is signed with an ephemeral CI debug key. Future updates may require uninstalling the previous beta first; save logs before doing so.
+2. Install and start [Shizuku](https://shizuku.rikka.app/download/); authorize Galaxy NR Tools. Non-root Shizuku usually requires restarting its service after a phone reboot.
+3. Optionally allow **Display over other apps** for non-interactive floating progress. Keep your device unlocked with the screen awake.
+4. Run **5G status** (optional/read-only), then **Probe six menu paths**. Probe should finish without changing settings.
+5. Review the log. Only if necessary, choose **Core restore** or **Full restore**, read the explicit confirmation, and monitor progress.
+6. Following a successful *apply*, optionally reboot; Shizuku shell initiates the request and manual reboot remains a fallback.
+
+**Six independent actions:** (1) Default LTE band, (2) remove NR5G prune, (3) remove NR whitelist, (4) Sub6/mmWave ALL ENABLE (**full only**), (5) SA/NSA ENABLE, (6) **REMOVE SA PERMIT LIST**. Actions (5) and (6) remain independent even when SA/NSA already shows `(*)`.
+
+## Documentation
+
+- [User guide (English)](docs/USER_GUIDE.md) · [中文使用说明](docs/USER_GUIDE.zh-CN.md)
+- [Detailed feature and safety boundaries](docs/FEATURES.md) · [功能说明与限制](docs/FEATURES.zh-CN.md)
+- [Privacy](PRIVACY.md) · [隐私说明](PRIVACY.zh-CN.md)
+- [Third-party code & licenses](THIRD_PARTY_NOTICES.md)
+- [Security / responsible reporting](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md) · [License](LICENSE)
+
+## Build from source
+
+JDK 17, Android SDK platform 35, Gradle 8.9, and Android Gradle Plugin 8.7.3:
 
 ```bash
 python3 -m unittest discover -s tests -v
+gradle --no-daemon :app:assembleDebug
 ```
 
-测试包括模拟 ServiceMode 页面、OCR 箭头变体与工程静态/安全约束。
+The app ID remains `com.example.galaxy5gmanager` for continuity with existing installs. **Release-signing limitation:** This first public beta uses a temporary CI debug signature. A long-lived upgrade-compatible signing key is **not** configured. Future APKs may require removing the old beta first. Any future persistent signing key must be stored in encrypted CI secrets, not in this repository. This project does not ask for or store your carrier passwords, IMEI or Shizuku credentials.
 
-## 授权与归属
+## Licensing & affiliation
 
-- 本应用原生 Java/Gradle 工程及菜单脚本使用 MIT 许可。
-- Shizuku API / Provider 为 [Shizuku-API](https://github.com/RikkaApps/Shizuku-API) 项目，MIT 许可；**本应用不是 Shizuku 官方产品**，不复制其商标资源。
-- 项目仅依赖 Shizuku 的运行时授权；不修改 Shizuku、Knox、Bootloader 和系统基带固件。
+Own project sources and original icon artwork are licensed under the [MIT license](LICENSE). **Third-party dependencies are not relicensed under MIT.** Shizuku-API is MIT; Google ML Kit is governed by Google's terms, and some bundled model components are proprietary. See [third-party notices](THIRD_PARTY_NOTICES.md) and [privacy](PRIVACY.md).
 
-
-## 云端构建验证（2026-10-14）
-
-- GitHub Actions 构建成功：`https://github.com/hyh9335/galaxy5g-manager/actions/runs/38506467653`
-- 18 项离线测试通过，`assembleDebug` 成功，上传的 APK 已校验 ZIP 完整性与内置脚本 SHA-256。
-- 仍未在 S23U/S25U 上完成真机运行验证，首次只能使用只读状态和菜单探测。
-
-## Android 17 UIAutomator 兼容修复 (0.2)
-
-SM-S938U Android 17 上，部分 ServiceMode 页面会让 `uiautomator dump` 返回失败。新版保留 UIAutomator 文字控件识别，失败时在记录里显示该命令的原始错误摘要，并通过 Shizuku shell 的 screencap 截图，在本应用内调用打包的 ML Kit Latin OCR 离线识别菜单文字和坐标，不新增应用、不上传截图。截图在临时目录中随即删除。
-
-OCR 无法取图、没有识别到菜单、重复相同文字或点击后页面没有发生预计变化时终止，不按预设屏幕坐标猜点击。首次使用仍只建议“探测六条菜单路径”，未获真机验证之前不要执行任何实际基带写入。
-
-
-## Android 17 / SM-S938U 专项修复（0.3）
-
-在该机型实测日志中，`uiautomator dump` 直接返回 `Killed`，其后 5 次 OCR 重试最终触发 `DeadObjectException`。这**不能证明 Shizuku 已失效**：拨号成功表明 UID 2000 下的命令可工作。更可能存在系统 UI 自动化受限、OCR 页面文字不匹配及后台应用进程回收等一种或多种情况。
-
-0.3 采取以下措施：Android 17 不再反复启动会被系统杀掉的 `uiautomator`；截图只在 Shizuku shell UID 2000 中保存为私有临时文件，并通过 `ParcelFileDescriptor` 传给普通应用的 ML Kit；App 在手动启动的探测期间使用系统认可的前台服务，结束后停止；单次会话复用 OCR 引擎；找不到目标只识别至多两次并列出所见候选菜单，而不是继续重试直到 Binder 服务崩溃。截图不上传、不永久保存，Binder 不传大图片。
-
-**首次验证仅选择“探测六条菜单路径”**，不要直接进行任何写入。如果候选中只看到 `Right-hardkey :Back. Please use the Menukey.` 之类的提示且没有 `UE SETTING & INFO`，说明实际停留的 ServiceMode 页面与假定主菜单不一致，需要进一步检查页面布局，绝不可据此猜测按钮位置。即使编译及模拟测试通过，也尚不等于 S25U Android 17 真机通过。
+Not affiliated with, endorsed by, or sponsored by Samsung, Google, or the Shizuku team. Samsung and Galaxy are respective owners' trademarks. This app intentionally uses an original icon, not Samsung/Shizuku artwork.

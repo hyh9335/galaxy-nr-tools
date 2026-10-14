@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.8.0
+VERSION=2.9.0
 UIA_UNAVAILABLE=1
 WORK=""
 PROFILE=core
@@ -19,8 +19,8 @@ trap cleanup EXIT HUP INT TERM
 
 usage() {
 cat <<'HELP'
-Galaxy 5G 手机本地脚本 v2.0 — 三星美版 S23 Ultra / S25 Ultra
-需要：Shizuku 已启动，并通过 aShell You 或 rish 以 uid=2000(shell) 执行。
+Galaxy NR Tools — 美版 Galaxy S23 / S24 / S25 / S26 系列 (U/U1)
+需要：Shizuku 已启动，并获得 shell UID 2000。正式使用不需终端应用。
 
   sh galaxy5g.sh status               检查手机、Shizuku 权限、系统版本、记录
   sh galaxy5g.sh plan                 打印将使用的菜单路径（不操作手机）
@@ -46,8 +46,8 @@ check_device() {
   UIA_UNAVAILABLE=1
   log '仅使用本机 OCR 识别 ServiceMode 菜单（不调用 UIAutomator）'
   case "$(printf %s "$manufacturer" | tr '[:upper:]' '[:lower:]')/$model" in
-    samsung/SM-S918U|samsung/SM-S918U1|samsung/SM-S938U|samsung/SM-S938U1) ;;
-    *) fail "未通过机型保护：厂商=$manufacturer 型号=$model。仅自动支持 S23U/S25U 美版 U/U1。";;
+    samsung/SM-S911U|samsung/SM-S911U1|samsung/SM-S916U|samsung/SM-S916U1|samsung/SM-S918U|samsung/SM-S918U1|samsung/SM-S711U|samsung/SM-S711U1|samsung/SM-S921U|samsung/SM-S921U1|samsung/SM-S926U|samsung/SM-S926U1|samsung/SM-S928U|samsung/SM-S928U1|samsung/SM-S721U|samsung/SM-S721U1|samsung/SM-S931U|samsung/SM-S931U1|samsung/SM-S936U|samsung/SM-S936U1|samsung/SM-S938U|samsung/SM-S938U1|samsung/SM-S937U|samsung/SM-S937U1|samsung/SM-S731U|samsung/SM-S731U1|samsung/SM-S942U|samsung/SM-S942U1|samsung/SM-S947U|samsung/SM-S947U1|samsung/SM-S948U|samsung/SM-S948U1|samsung/SM-S741U|samsung/SM-S741U1) ;;
+    *) fail "未通过机型保护：厂商=$manufacturer 型号=$model。仅支持已列出的美版 Galaxy S23 及更新型号 U/U1；其他设备仅可使用应用的公开 Android 5G 诊断。";;
   esac
 }
 

@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  * The script's exact digest and argv are checked before execution.
  */
 public final class PrivilegedService extends IGalaxyAutomation.Stub {
-    private static final String SCRIPT_SHA256 = "e4a3d0aad0c0f33ecf96be92b995a7669005599a30c510785605c42c2b13e9dd";
+    private static final String SCRIPT_SHA256 = "189fb3e5e8ebe44a2df1a9a9feceff03c7d8aa4a11fa5650ec6c14af493ded29";
     private final StringBuilder report = new StringBuilder();
     private volatile boolean running;
     private volatile Process child;
@@ -108,6 +108,43 @@ public final class PrivilegedService extends IGalaxyAutomation.Stub {
             if (scriptFile != null && scriptFile.exists()) scriptFile.delete();
             if (replyFile != null && replyFile.exists()) replyFile.delete();
             running = false;
+            returnToManagerIfOnServiceMode();
+        }
+    }
+
+    /**
+     * Return to the app after completion, but never steal focus from a different app.
+     * Normal Android background activity launches are restricted. The already
+     * authorized Shizuku shell may request a normal explicit activity start.
+     * If the system declines, the foreground notification still opens results.
+     */
+    private void returnToManagerIfOnServiceMode() {
+        try {
+            Process focusProcess = new ProcessBuilder("/system/bin/dumpsys", "window").start();
+            StringBuilder focus = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                     focusProcess.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.contains("mCurrentFocus") || line.contains("mFocusedApp") ||
+                        line.contains("mTopFocused") || line.contains("mFocusedWindow")) {
+                        focus.append(line).append('\n');
+                    }
+                }
+            }
+            if (!focusProcess.waitFor(3, TimeUnit.SECONDS)) { focusProcess.destroyForcibly(); return; }
+            String focused = focus.toString().toLowerCase(java.util.Locale.ROOT);
+            if (!(focused.contains("rilservicemodeapp") || focused.contains("servicemodeapp"))) {
+                append("Auto-return skipped: ServiceMode is no longer foreground.");
+                return;
+            }
+            Process started = new ProcessBuilder("/system/bin/am", "start", "--activity-clear-top",
+                "--activity-single-top", "-n", "com.example.galaxy5gmanager/.MainActivity").start();
+            if (!started.waitFor(5, TimeUnit.SECONDS)) { started.destroyForcibly(); return; }
+            append(started.exitValue() == 0 ? "Auto-return requested." :
+                "Auto-return blocked by Android; tap the foreground notification.");
+        } catch (Exception ex) {
+            append("Auto-return unavailable; open the foreground notification: " + ex.getClass().getSimpleName());
         }
     }
 

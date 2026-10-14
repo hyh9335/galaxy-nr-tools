@@ -7,3 +7,14 @@ local.properties
 *.aab
 *.jks
 *.keystore
+
+# Private release signing
+signing/
+secrets/
+*.p12
+*.pem
+*.key
+*.asc
+*.properties.local
+__pycache__/
+*.pyc

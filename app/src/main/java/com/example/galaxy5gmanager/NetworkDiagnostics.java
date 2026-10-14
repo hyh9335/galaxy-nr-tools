@@ -35,6 +35,19 @@ public final class NetworkDiagnostics {
         return "结论：当前蜂窝数据网络类型不足以判断 5G 是否可用，不能自动建议修改工程设置。";
     }
 
+
+    private static String verdictFor(Context context, int dataRat, int override) {
+        if (UiText.chinese(context)) return verdict(dataRat, override);
+        if (dataRat == TelephonyManager.NETWORK_TYPE_NR)
+            return "Observed NR data connection: evidence of active 5G. No need to retry menu changes just because of the 5G icon.";
+        if (override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ||
+            override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED)
+            return "Android reports an NSA/advanced 5G display state, but this does not prove active NR attachment.";
+        if (dataRat == TelephonyManager.NETWORK_TYPE_LTE)
+            return "Currently on LTE. Coverage, carrier policy and the LTE anchor used by NSA can explain this; LTE does not mean 5G is disabled.";
+        return "Current radio state cannot confirm 5G support or justify changing engineering settings.";
+    }
+
     private static String radioTypeName(int type) {
         switch (type) {
             case TelephonyManager.NETWORK_TYPE_NR: return "NR (5G)";
@@ -49,28 +62,35 @@ public final class NetworkDiagnostics {
 
     public static Result inspect(Context context, int override) {
         if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED)
-            return new Result("未授权读取电话状态。仅在手机本地读取，不会上传，也不会读取 IMEI/IMSI。", false);
+            return new Result(UiText.t(context, "Phone-state permission not granted. Nothing is uploaded or used to read IMEI/IMSI.",
+                "未授权读取电话状态。仅在手机本地读取，不会上传，也不会读取 IMEI/IMSI。"), false);
         try {
             TelephonyManager tm = context.getSystemService(TelephonyManager.class);
-            if (tm == null) return new Result("无蜂窝网络管理器；无法检测。", false);
+            if (tm == null) return new Result(UiText.t(context, "Mobile network service not available.", "无蜂窝网络管理器；无法检测。"), false);
             int dataRat = tm.getDataNetworkType();
             String label = radioTypeName(dataRat);
-            String display = override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ? "系统 5G NSA 显示" :
-                override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED ? "系统增强型 5G 显示（不等于一定在毫米波）" :
-                override < 0 ? "尚未收到网络显示回调" : "没有 5G 显示标记";
+            String display = override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ?
+                UiText.t(context,"Android shows 5G NSA", "系统 5G NSA 显示") :
+                override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED ?
+                UiText.t(context,"Enhanced 5G display (not proof of mmWave)", "系统增强型 5G 显示（不等于一定在毫米波）") :
+                override < 0 ? UiText.t(context,"Waiting for display callback", "尚未收到网络显示回调") :
+                UiText.t(context,"No 5G display indicator", "没有 5G 显示标记");
             boolean evidence = isObserved5g(dataRat, override);
-            String text = "当前默认移动数据网络：" + label + "\n" +
-                "系统显示状态：" + display + "\n" +
-                "移动数据开关：" + (tm.isDataEnabled() ? "开启" : "关闭") + "\n" +
-                verdict(dataRat, override) + "\n\n" +
-                "能力检测边界：无法通过公开 API 证明 NR PRUNE、GCF、SA permit list 或 mmWave ALL ENABLE 已解除。" +
-                "Shizuku shell 也不等于具备 READ_PRIVILEGED_PHONE_STATE。" +
-                "即使已经观察到 5G，也不证明每个工程菜单开关都已开启。";
+            String text = UiText.t(context, "Mobile data RAT: ", "当前默认移动数据网络：") + label + "\n" +
+                UiText.t(context, "Display state: ", "系统显示状态：") + display + "\n" +
+                UiText.t(context, "Mobile data: ", "移动数据开关：") +
+                    (tm.isDataEnabled() ? UiText.t(context,"On","开启") : UiText.t(context,"Off","关闭")) + "\n" +
+                verdictFor(context, dataRat, override) + "\n\n" +
+                UiText.t(context,
+                    "Limits: Public Android APIs cannot verify PRUNE, GCF, SA permit list, or mmWave ALL ENABLE. A Shizuku shell does not grant privileged radio-state permissions. A 5G connection does not prove every menu switch is enabled.",
+                    "能力检测边界：无法通过公开 API 证明 NR PRUNE、GCF、SA permit list 或 mmWave ALL ENABLE 已解除。Shizuku shell 也不等于具备 READ_PRIVILEGED_PHONE_STATE。即使已经观察到 5G，也不证明每个工程菜单开关都已开启。");
             return new Result(text, evidence);
         } catch (SecurityException | UnsupportedOperationException e) {
-            return new Result("网络状态权限或设备接口不支持：" + e.getClass().getSimpleName(), false);
+            return new Result(UiText.t(context, "Radio-state permission or device API unavailable: ", "网络状态权限或设备接口不支持：") +
+                e.getClass().getSimpleName(), false);
         } catch (RuntimeException e) {
-            return new Result("读取失败：" + e.getClass().getSimpleName() + "，不能据此判断 5G 被禁用。", false);
+            return new Result(UiText.t(context, "Read failed; do not infer 5G is disabled: ",
+                "读取失败：不能据此判断 5G 被禁用：") + e.getClass().getSimpleName(), false);
         }
     }
 }

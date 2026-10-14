@@ -151,6 +151,22 @@ class ServiceModeTests(unittest.TestCase):
     self.assertNotEqual(p.returncode,0)
     self.assertEqual(s['events'],[])
 
+  def test_new_us_s23_s24_s25_s26_models_allow_read_only(self):
+    for model in ['SM-S911U','SM-S916U1','SM-S711U','SM-S921U','SM-S926U1',
+                  'SM-S928U','SM-S931U','SM-S937U1','SM-S936U','SM-S938U',
+                  'SM-S942U','SM-S947U1','SM-S948U','SM-S741U1']:
+      with self.subTest(model=model):
+        p, st = self.execute('status', model=model)
+        self.assertEqual(p.returncode, 0, p.stdout+'\n'+p.stderr)
+        self.assertEqual(st['settings'], [])
+
+  def test_s22_and_non_us_still_blocked(self):
+    for model in ['SM-S901U','SM-S908U1','SM-S938B','SM-S948W','SM-F966U']:
+      with self.subTest(model=model):
+        p, st = self.execute('probe','core',model=model)
+        self.assertNotEqual(p.returncode,0)
+        self.assertEqual(st['settings'], [])
+
   def test_reject_non_us_device(self):
     p,s=self.execute('probe','core',model='SM-S938B')
     self.assertNotEqual(p.returncode,0)

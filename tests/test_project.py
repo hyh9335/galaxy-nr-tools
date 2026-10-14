@@ -33,9 +33,34 @@ class ProjectChecks(unittest.TestCase):
 
     def test_main_ui_is_not_silent_full_auto(self):
         src = ACTIVITY.read_text()
-        self.assertIn('setPositiveButton("确认执行"', src)
-        self.assertIn('探测六条菜单路径', src)
-        self.assertIn('中止当前操作', src)
+        self.assertIn('setPositiveButton(tr("Confirm restore"', src)
+        self.assertIn('Probe six menu paths', src)
+        self.assertIn('Cancel current task', src)
+
+    def test_auto_return_is_foreground_guarded(self):
+        source = SERVICE.read_text()
+        self.assertIn('returnToManagerIfOnServiceMode()', source)
+        self.assertIn('mCurrentFocus', source)
+        self.assertIn('rilservicemodeapp', source)
+        self.assertIn('com.example.galaxy5gmanager/.MainActivity', source)
+        self.assertIn('Auto-return skipped', source)
+
+    def test_system_themes_and_two_languages(self):
+        resources = ROOT / 'app/src/main/res'
+        manifest = (ROOT / 'app/src/main/AndroidManifest.xml').read_text()
+        self.assertIn('android:theme="@style/GalaxyNrTheme"', manifest)
+        assert (resources/'values/styles.xml').exists()
+        assert (resources/'values-night/styles.xml').exists()
+        assert (resources/'values/strings.xml').exists()
+        assert (resources/'values-zh/strings.xml').exists()
+        self.assertIn('Galaxy NR Tools', (resources/'values/strings.xml').read_text())
+        self.assertIn('Galaxy NR 工具', (resources/'values-zh/strings.xml').read_text())
+        self.assertIn('getResources().getConfiguration().getLocales()', (ROOT/'app/src/main/java/com/example/galaxy5gmanager/UiText.java').read_text())
+
+    def test_new_app_icon(self):
+        resources = ROOT/'app/src/main/res'
+        self.assertTrue((resources/'drawable-nodpi/ic_launcher_foreground.png').stat().st_size > 2000)
+        self.assertIn('<monochrome', (resources/'mipmap-anydpi-v26/ic_launcher.xml').read_text())
 
     def test_android17_binder_screen_transport_is_file_descriptor(self):
         root = ROOT / 'app/src/main'

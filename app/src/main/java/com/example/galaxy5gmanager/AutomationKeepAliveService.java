@@ -46,9 +46,11 @@ public final class AutomationKeepAliveService extends Service {
         if (s != null) s.handler.postDelayed(() -> {
             // Leave room for a queued final onProgress Binder callback.
             if (s == active && !s.terminal)
-                s.finish("执行已结束，请回应用查看记录", false);
+                s.finish(tr("Task finished; open the app to view results", "执行已结束，请回应用查看记录"), false);
         }, 1000L);
     }
+
+    private String tr(String en, String zh) { return UiText.t(this, en, zh); }
 
     private int dp(int n) {
         return (int) (getResources().getDisplayMetrics().density * n + 0.5f);
@@ -87,7 +89,7 @@ public final class AutomationKeepAliveService extends Service {
             // untrusted-touch suppression in the small overlapping region.
             params.alpha = 0.78f;
             wm.addView(pill, params);
-            display("5G · 正在准备探测…", Color.rgb(36, 53, 77));
+            display(tr("NR · Preparing menu probe…", "NR · 正在准备探测…"), Color.rgb(36, 53, 77));
         } catch (RuntimeException e) {
             pill = null; // Overlay is optional; the full trace remains in-app.
         }
@@ -99,26 +101,26 @@ public final class AutomationKeepAliveService extends Service {
             lastError = line.substring("[Galaxy5G] 停止：".length());
             display("✕ " + lastError, Color.rgb(157, 40, 52));
         } else if (line.contains("流程异常终止") || line.startsWith("执行异常：") || line.startsWith("已中断。")) {
-            finish("✕ " + (lastError.isEmpty() ? "已停止，请查看执行日志" : lastError), true);
+            finish("✕ " + (lastError.isEmpty() ? tr("Stopped · see execution log", "已停止，请查看执行日志") : lastError), true);
         } else if (line.contains("探测结束：") || line.contains("所有指定菜单操作已提交")) {
-            finish(line.contains("探测结束：") ? "✓ 菜单探测完成（未修改设置）" :
-                "✓ 菜单操作已提交（仍需验证网络）", false);
+            finish(line.contains("探测结束：") ? tr("✓ Probe complete (no changes)", "✓ 菜单探测完成（未修改设置）") :
+                tr("✓ Menu actions submitted · verify network", "✓ 菜单操作已提交（仍需验证网络）"), false);
         } else if (line.startsWith("[Galaxy5G] [") && line.contains("] ")) {
             int pos = line.indexOf("] ", 12);
             if (pos > 12) {
                 String step = line.substring(12, pos);
                 if (step.length() <= 2 && step.matches("[1-6]"))
-                    display("● 第 " + step + "/" + totalSteps + " 项 · " + line.substring(pos + 2), Color.rgb(36, 53, 77));
+                    display(tr("● Step ", "● 第 ") + step + "/" + totalSteps + tr(" · ", " 项 · ") + line.substring(pos + 2), Color.rgb(36, 53, 77));
             }
         } else if (line.contains("点击 [")) {
             int first = line.indexOf("点击 [") + 4;
             int last = line.indexOf(']', first);
             if (last > first)
-                display("● 正在打开 " + line.substring(first, last), Color.rgb(36, 53, 77));
+                display(tr("● Opening ", "● 正在打开 ") + line.substring(first, last), Color.rgb(36, 53, 77));
         } else if (line.contains("可访问：")) {
-            display("✓ 本项菜单路径探测通过", Color.rgb(29, 100, 88));
+            display(tr("✓ Menu path verified", "✓ 本项菜单路径探测通过"), Color.rgb(29, 100, 88));
         } else if (line.contains("已点击 [")) {
-            display("✓ 本项操作已提交（未验证 NV）", Color.rgb(29, 100, 88));
+            display(tr("✓ Action submitted (NV unverified)", "✓ 本项操作已提交（未验证 NV）"), Color.rgb(29, 100, 88));
         }
     }
 
@@ -132,7 +134,7 @@ public final class AutomationKeepAliveService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel("g5g-progress", "5G 菜单探测",
+        nm.createNotificationChannel(new NotificationChannel("g5g-progress", getString(R.string.notification_name),
             NotificationManager.IMPORTANCE_MIN));
         active = this;
     }
@@ -143,8 +145,8 @@ public final class AutomationKeepAliveService extends Service {
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification notification = new Notification.Builder(this, "g5g-progress")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle("Galaxy 5G 正在探测 ServiceMode")
-            .setContentText("用户启动的本地菜单识别进行中")
+            .setContentTitle(tr("Galaxy NR Tools · ServiceMode session", "Galaxy NR 工具 · 工程菜单运行中"))
+            .setContentText(tr("Offline OCR started by you", "正在执行用户启动的离线 OCR"))
             .setContentIntent(pi).setOngoing(true).build();
         startForeground(221, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         terminal = false;
