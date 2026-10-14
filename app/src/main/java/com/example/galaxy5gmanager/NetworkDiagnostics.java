@@ -48,15 +48,15 @@ public final class NetworkDiagnostics {
         return "Current radio state cannot confirm 5G support or justify changing engineering settings.";
     }
 
-    private static String radioTypeName(int type) {
+    private static String radioTypeName(int type, boolean chinese) {
         switch (type) {
             case TelephonyManager.NETWORK_TYPE_NR: return "NR (5G)";
-            case TelephonyManager.NETWORK_TYPE_LTE: return "LTE (4G / 5G NSA 锚点)";
+            case TelephonyManager.NETWORK_TYPE_LTE: return chinese ? "LTE (4G / 5G NSA 锚点)" : "LTE (4G / NSA anchor)";
             case TelephonyManager.NETWORK_TYPE_HSPAP: return "HSPA+ (3G)";
             case TelephonyManager.NETWORK_TYPE_UMTS: return "UMTS (3G)";
-            case TelephonyManager.NETWORK_TYPE_IWLAN: return "IWLAN (Wi-Fi 承载)";
-            case TelephonyManager.NETWORK_TYPE_UNKNOWN: return "未知";
-            default: return "网络类型代码 " + type;
+            case TelephonyManager.NETWORK_TYPE_IWLAN: return chinese ? "IWLAN (Wi-Fi 承载)" : "IWLAN (Wi-Fi transport)";
+            case TelephonyManager.NETWORK_TYPE_UNKNOWN: return chinese ? "未知" : "Unknown";
+            default: return (chinese ? "网络类型代码 " : "Network type code ") + type;
         }
     }
 
@@ -68,7 +68,7 @@ public final class NetworkDiagnostics {
             TelephonyManager tm = context.getSystemService(TelephonyManager.class);
             if (tm == null) return new Result(UiText.t(context, "Mobile network service not available.", "无蜂窝网络管理器；无法检测。"), false);
             int dataRat = tm.getDataNetworkType();
-            String label = radioTypeName(dataRat);
+            String label = radioTypeName(dataRat, UiText.chinese(context));
             String display = override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ?
                 UiText.t(context,"Android shows 5G NSA", "系统 5G NSA 显示") :
                 override == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED ?
