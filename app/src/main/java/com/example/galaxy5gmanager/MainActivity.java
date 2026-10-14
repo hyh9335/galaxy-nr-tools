@@ -230,7 +230,7 @@ public final class MainActivity extends Activity {
             statusText.setText("连接 Shizuku UserService 中…");
             Shizuku.UserServiceArgs a = new Shizuku.UserServiceArgs(
                     new ComponentName(getPackageName(), PrivilegedService.class.getName()))
-                .processNameSuffix("galaxy5g").daemon(false).version(2).tag("galaxy5g-verified");
+                .processNameSuffix("galaxy5g").daemon(false).version(3).tag("galaxy5g-verified");
             Shizuku.bindUserService(a, connection);
         } catch (Exception e) { bindRequested = false; showError(e); }
     }
