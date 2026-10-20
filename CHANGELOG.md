@@ -1,3 +1,11 @@
+## v0.10.2-beta.1 — Guarded OCR menu-number reconciliation (experimental)
+
+- Fixes the S25 Ultra ServiceMode screenshot where Samsung OCR returned `21 SYSTEM` on a screen with `PROTOCOL` and `UE SETTING MEINU`, falsely causing `SETTING → SYSTEM` to fail.
+- Adds a shared navigation-only rule for OCR-merged one/two-digit row prefixes, limited to page signatures verified using sibling entries (SETTING, PROTOCOL, NR5G and related navigation).
+- Retains exact, unmodified matching for radio-setting leaf actions, bounded state-machine recovery, and separate `SA/NSA ENABLE` versus `REMOVE SA PERMIT LIST` operations.
+- Adds regression coverage for the exact reported candidate page, other numbered navigation aliases, absent sibling evidence, and multiple ambiguous targets.
+- No dialer or 5G settings behavior changes. Please test probe mode before changing modem configuration.
+
 ## v0.10.1-beta.1 — Dialer fallback regression fix (experimental)
 
 - Fixes v0.10.0 blocking before all digits on One UI when bundled offline OCR cannot resolve a complete keypad.

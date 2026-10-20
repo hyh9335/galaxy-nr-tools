@@ -5,7 +5,7 @@
 # This tool sends screen input to Samsung's ServiceMode. It does not write NV directly.
 
 set -u
-VERSION=2.10.1
+VERSION=2.10.2
 UIA_UNAVAILABLE=1
 WORK=""
 PROFILE=core
@@ -119,18 +119,32 @@ find_label() {
     gsub(/[[:space:]]+/, " ", t)
     return t
   }
-  function matched(t) {
+  # Some One UI screenshots merge an adjacent numeric row indicator into a
+  # separate menu label, e.g. "21 SYSTEM" instead of "[2] SYSTEM". Strip
+  # 1-2 leading digits ONLY for known navigation labels on a recognized page.
+  # Never strip prefixes when committing radio-setting leaf actions.
+  function nav_text(s) {
+    s=strip(s)
+    sub(/^[0-9][0-9]?[[:space:]]+/, "", s)
+    return s
+  }
+  function matched(t,   nav) {
     if (t == want) return 1
+    nav=nav_text(t)
+    if (want == "SETTING" && ue_page && nav == want) return 1
+    if ((want == "SYSTEM" || want == "PROTOCOL") && setting_page && nav == want) return 1
+    if ((want == "NR5G" || want == "GCF") && protocol_page && nav == want) return 1
+    if (want == "PRUNE STATUS" && nr_page && nav == want) return 1
     if (want == "UE SETTING & INFO")
       return t ~ /^UE SETTING (8&|&) INFO$/
     if (want == "NEXT PAGE")
       return t ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/
     if (want == "SUB6/MMWAVE" && nr_page)
-      return t ~ /^(SUB6|SUB|SUBG|SUB5)[\/]MMWAVE$/
+      return nav ~ /^(SUB6|SUB|SUBG|SUB5)[\/]MMWAVE$/
     if (want == "SA/NSA MODE CONTROL" && nr_page)
-      return t == "SA/NSA MODE CONTR0L" || t == "SA/NSA MODE CONTRO1"
+      return nav == want || nav == "SA/NSA MODE CONTR0L" || nav == "SA/NSA MODE CONTRO1"
     if (want == "SET LTE BAND CONFIG" && sys_page)
-      return t == "SET LTE BAND C0NFIG" || t == "SET LTE BAND CONF1G"
+      return nav == want || nav == "SET LTE BAND C0NFIG" || nav == "SET LTE BAND CONF1G"
     if (want == "ALL ENABLE" && sub_page)
       return t ~ /^ALL ENABLE([[:space:]]*\(\*?\))?$/
     if (want == "SA/NSA ENABLE" && sa_page)
@@ -142,8 +156,15 @@ find_label() {
   }
   {
     t[NR]=strip($1)
-    if (t[NR] == "PRUNE STATUS") has_prune=1
-    if (t[NR] == "SA/NSA MODE CONTROL" || t[NR] == "SA/NSA MODE CONTR0L" || t[NR] == "SA/NSA MODE CONTRO1") has_sa_nav=1
+    nav[NR]=nav_text(t[NR])
+    if (nav[NR] == "UE SETTING MENU" || nav[NR] == "UE SETTING MEINU") has_ue_header=1
+    if (nav[NR] == "SETTING") has_setting=1
+    if (nav[NR] == "SYSTEM") has_system=1
+    if (nav[NR] == "PROTOCOL") has_protocol=1
+    if (nav[NR] == "NR5G") has_nr5g=1
+    if (nav[NR] == "GCF") has_gcf=1
+    if (nav[NR] == "PRUNE STATUS") has_prune=1
+    if (nav[NR] == "SA/NSA MODE CONTROL" || nav[NR] == "SA/NSA MODE CONTR0L" || nav[NR] == "SA/NSA MODE CONTRO1") has_sa_nav=1
     if (t[NR] == "SRS ENABLE/DISABLE" || t[NR] == "RRC CAP FEATURE PHY") has_nr_detail=1
     if (t[NR] == "SUB6 ONLY ENABLE") has_sub6=1
     if (t[NR] == "MMWAVE ONLY ENABLE") has_mmwave=1
@@ -154,6 +175,11 @@ find_label() {
     if (t[NR] ~ /^NEXT PAGE([[:space:]]*[-|>]+)?$/) has_next=1
   }
   END {
+    # Distinct sibling signatures are necessary before accepting a
+    # prefix-corrected navigation item; one isolated OCR string is insufficient.
+    ue_page = has_ue_header && has_setting
+    setting_page = has_system && has_protocol && !has_gcf
+    protocol_page = has_nr5g && has_gcf
     nr_page = has_prune && has_sa_nav
     sub_page = has_sub6 && has_mmwave && has_disable
     sa_page = has_permit && (has_sa_disable || has_nsa_disable || !sub_page)

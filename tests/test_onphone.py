@@ -51,6 +51,14 @@ class ServiceModeTests(unittest.TestCase):
       menu['NR5G']=['PRUNE STATUS','SUB/MMWAVE','SA/NSA MODE CONTROL','RRC CAP FEATURE PHY']
       menu['SUB']=['ALL ENABLE (*)','SUB6 ONLY ENABLE','MMWAVE ONLY ENABLE','DISABLE']
       menu['SA']=['SA/NSA ENABLE (*)','SA DISABLE','NSA DISABLE','REMOVE SA PERMIT LIST']
+    if variant == 'ocr_number_prefix':
+      menu['SETTING']=['21 SYSTEM','31 PROTOCOL']
+      menu['PROTOCOL']=['11 NR5G','21 GCF']
+      menu['NR5G']=['3 PRUNE STATUS','21 SUB/MMWAVE','3 SA/NSA MODE CONTROL']
+    if variant == 'ocr_number_without_sibling':
+      menu['SETTING']=['21 SYSTEM','UNRELATED']
+    if variant == 'ocr_duplicate_numbered_system':
+      menu['SETTING']=['21 SYSTEM','22 SYSTEM','PROTOCOL']
     return ''.join(f'{x}\t210\t{150+i*100}\n' for i,x in enumerate(menu.get(screen,[])))
 
   def execute(self, *args, variant='', model='SM-S938U'):
@@ -192,6 +200,47 @@ class ServiceModeTests(unittest.TestCase):
     self.assertEqual(len(s['settings']),6)
     self.assertIn('ALL ENABLE',s['settings'])
     self.assertNotIn('tap:BACK',s['events'])
+
+  def test_real_system_menu_ocr_21_prefix_and_header(self):
+    # Exact user report: header "UE SETTING MEINU", sibling PROTOCOL, and
+    # OCR-merged label "21 SYSTEM" on the same ServiceMode page.
+    def page(screen):
+      if screen == 'SETTING':
+        return ('03 &9\t70\t50\nSERVICEMODE\t70\t70\n'
+                'UE SETTING MEINU\t170\t95\n'
+                'PROTOCOL\t210\t250\n21 SYSTEM\t210\t150\n')
+      return self.mock_ocr_text(screen, '')
+    code, out, err, events = self.ocr_probe(page)
+    self.assertEqual(code, 0, out+'\n'+err)
+    self.assertEqual(events.count('tap:SYSTEM'), 1)
+    self.assertEqual(events.count('tap:NEXT PAGE'), 4)
+    self.assertIn('[6] 可访问：REMOVE SA PERMIT LIST', out)
+    self.assertEqual((self.base/'settings').read_text(), '')
+
+  def test_numbered_navigation_variants_across_all_six_routes(self):
+    p, st = self.execute('probe', 'full', variant='ocr_number_prefix')
+    self.assertEqual(p.returncode, 0, p.stdout+'\n'+p.stderr)
+    self.assertEqual(st['events'].count('tap:SYSTEM'), 1)
+    self.assertEqual(st['events'].count('tap:PROTOCOL'), 5)
+    self.assertEqual(st['events'].count('tap:NEXT PAGE'), 4)
+    self.assertEqual(st['settings'], [])
+
+  def test_numbered_navigation_variants_apply_keep_leaf_actions_strict(self):
+    p, st = self.execute('apply', 'full', 'FULL', variant='ocr_number_prefix')
+    self.assertEqual(p.returncode, 0, p.stdout+'\n'+p.stderr)
+    self.assertEqual(len(st['settings']), 6)
+    self.assertIn('REMOVE SA PERMIT LIST', st['settings'])
+
+  def test_unverified_numbered_system_without_protocol_sibling_stops(self):
+    p, st = self.execute('apply', 'core', 'APPLY', variant='ocr_number_without_sibling')
+    self.assertNotEqual(p.returncode, 0)
+    self.assertEqual(st['settings'], [])
+
+  def test_ambiguous_numbered_system_refuses_to_pick_a_coordinate(self):
+    p, st = self.execute('probe', 'full', variant='ocr_duplicate_numbered_system')
+    self.assertNotEqual(p.returncode, 0)
+    self.assertIn('多个不同位置', p.stderr)
+    self.assertEqual(st['settings'], [])
 
   def test_real_s25u_ocr_aliases_all_six_paths(self):
     p,st=self.execute('probe','full',variant='ocr_realistic')
